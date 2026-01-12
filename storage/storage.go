@@ -13,6 +13,7 @@ type Store[T any] interface {
 	Get(key string) (*T, error)
 	List() ([]*T, error)
 	Count() (int, error)
+	Delete(key string) error
 }
 
 func NewStore[T any](storageType StorageType) Store[T] {

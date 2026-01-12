@@ -15,6 +15,7 @@ func Exec() {
 			managerCmd,
 			workerCmd,
 			listCmd,
+			deployCmd,
 		},
 	}
 

@@ -1,7 +1,5 @@
 package task
 
-import "github.com/google/uuid"
-
 type EventAction int
 
 const (
@@ -10,6 +8,6 @@ const (
 )
 
 type Event struct {
-	TaskID uuid.UUID
-	Action EventAction
+	Task   *Task       // Full task data
+	Action EventAction // DeployEvent or StopEvent
 }

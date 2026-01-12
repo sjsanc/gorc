@@ -9,9 +9,10 @@ const (
 )
 
 type Runtime interface {
-	Start() error
-	Stop() error
-	Status() (string, error)
+	Start(image string, taskID string) (containerID string, err error)
+	Stop(containerID string) error
+	Status(containerID string) (string, error)
+	Wait(containerID string) (exitCode int64, err error)
 }
 
 func NewRuntime(runtimeType RuntimeType) (Runtime, error) {
