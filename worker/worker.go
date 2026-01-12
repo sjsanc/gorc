@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
+	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/task"
@@ -129,7 +130,7 @@ func (w *Worker) registerWithManager() error {
 		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
 
-	println(jsonData)
+	w.logger.Debugf("Sending worker registration: %v", string(jsonData))
 
 	endpoint := fmt.Sprintf("http://%s/worker", w.managerAddr)
 	b := bytes.NewBuffer(jsonData)
@@ -139,7 +140,7 @@ func (w *Worker) registerWithManager() error {
 	}
 	defer resp.Body.Close()
 
-	fmt.Println(resp)
+	w.logger.Debugf("Worker registration response: %s", resp.Status)
 
 	return nil
 }
@@ -154,7 +155,7 @@ func (w *Worker) processEvents() {
 		default:
 			event, ok := w.events.Dequeue()
 			if !ok {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(config.DefaultEventProcessingDelay)
 				continue
 			}
 
@@ -285,7 +286,7 @@ func (w *Worker) reportTaskStatus(taskID uuid.UUID, state, containerID, errMsg s
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: config.DefaultHTTPClientTimeout}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("error sending status update: %v", err)
@@ -303,7 +304,7 @@ func (w *Worker) reportTaskStatus(taskID uuid.UUID, state, containerID, errMsg s
 // sendHeartbeats sends periodic heartbeat messages to the Manager.
 // Heartbeats are sent every 5 seconds to keep the worker alive and reachable.
 func (w *Worker) sendHeartbeats() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(config.DefaultHeartbeatInterval)
 	defer ticker.Stop()
 
 	for {
@@ -318,7 +319,7 @@ func (w *Worker) sendHeartbeats() {
 				continue
 			}
 
-			client := &http.Client{Timeout: 5 * time.Second}
+			client := &http.Client{Timeout: config.DefaultHeartbeatInterval}
 			resp, err := client.Do(httpReq)
 			if err != nil {
 				w.logger.Warnf("failed to send heartbeat to manager: %v", err)

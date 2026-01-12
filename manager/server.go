@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sjsanc/gorc/api"
+	"github.com/sjsanc/gorc/config"
 )
 
 type server struct {
@@ -23,11 +23,11 @@ type server struct {
 
 func newServer(manager *Manager, address string, port int) *server {
 	if address == "" {
-		address = "0.0.0.0"
+		address = config.DefaultListenAddress
 	}
 
 	if port == 0 {
-		port = 5555
+		port = config.DefaultManagerPort
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,7 +58,7 @@ func (s *server) start() error {
 func (s *server) stop() error {
 	s.cancel()
 	if s.httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultServerShutdownTimeout)
 		defer cancel()
 		return s.httpServer.Shutdown(ctx)
 	}
@@ -88,7 +88,9 @@ func (s *server) initRouter() {
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "ok",
+	})
 }
 
 // GET /node
@@ -97,13 +99,12 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, err := s.manager.listNodes()
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Error listing nodes"))
+		http.Error(w, fmt.Sprintf("error listing nodes: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(nodes)
 }
 
@@ -113,13 +114,12 @@ func (s *server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 	workers, err := s.manager.listWorkers()
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Error listing workers"))
+		http.Error(w, fmt.Sprintf("error listing workers: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(workers)
 }
 
@@ -131,20 +131,18 @@ func (s *server) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	req := api.RegisterWorkerRequest{}
 	err := d.Decode(&req)
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Error decoding request"))
+		http.Error(w, fmt.Sprintf("error decoding request: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	mw, err := s.manager.registerWorker(req)
 	if err != nil {
-		w.WriteHeader(500)
-		w.Write([]byte("Error registering worker"))
+		http.Error(w, fmt.Sprintf("error registering worker: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":   "registered",
 		"workerId": mw.ID.String(),

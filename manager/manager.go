@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
+	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/storage"
@@ -104,7 +105,7 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 // This method blocks until Stop() is called.
 func (m *Manager) Run() error {
 	// Start detecting dead workers: timeout 30 seconds, check every 10 seconds
-	m.detectDeadWorkers(30*time.Second, 10*time.Second)
+	m.detectDeadWorkers(config.DefaultHeartbeatTimeout, config.DefaultHeartbeatCheck)
 
 	if err := m.server.start(); err != nil {
 		return fmt.Errorf("error starting server: %v", err)
@@ -137,7 +138,7 @@ func (m *Manager) registerNode(node *node.Node) (*node.Node, error) {
 		return nil, fmt.Errorf("error registering node: %v", err)
 	}
 
-	fmt.Println("Node registered:", node.Hostname)
+	m.logger.Infof("Node registered: %s", node.Hostname)
 
 	return node, nil
 }

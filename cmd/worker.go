@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/worker"
@@ -71,6 +74,28 @@ var workerCmd = &cli.Command{
 			return err
 		}
 
-		return w.Run()
+		// Handle graceful shutdown on SIGINT/SIGTERM
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		// Run worker in background
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- w.Run()
+		}()
+
+		// Wait for shutdown signal or error
+		select {
+		case sig := <-sigChan:
+			sugar.Infof("Received signal %v, shutting down gracefully...", sig)
+			if err := w.Stop(); err != nil {
+				sugar.Errorf("Error during shutdown: %v", err)
+				return err
+			}
+			fmt.Println("Worker shut down successfully")
+			return nil
+		case err := <-errChan:
+			return err
+		}
 	},
 }

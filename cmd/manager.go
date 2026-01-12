@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/sjsanc/gorc/manager"
 	"github.com/sjsanc/gorc/runtime"
@@ -67,6 +70,28 @@ var managerCmd = &cli.Command{
 			return err
 		}
 
-		return m.Run()
+		// Handle graceful shutdown on SIGINT/SIGTERM
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		// Run manager in background
+		errChan := make(chan error, 1)
+		go func() {
+			errChan <- m.Run()
+		}()
+
+		// Wait for shutdown signal or error
+		select {
+		case sig := <-sigChan:
+			sugar.Infof("Received signal %v, shutting down gracefully...", sig)
+			if err := m.Stop(); err != nil {
+				sugar.Errorf("Error during shutdown: %v", err)
+				return err
+			}
+			fmt.Println("Manager shut down successfully")
+			return nil
+		case err := <-errChan:
+			return err
+		}
 	},
 }

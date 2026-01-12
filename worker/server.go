@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
+	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/task"
 )
 
@@ -25,11 +25,11 @@ type server struct {
 
 func newServer(worker *Worker, address string, port int) *server {
 	if address == "" {
-		address = "0.0.0.0"
+		address = config.DefaultListenAddress
 	}
 
 	if port == 0 {
-		port = 5556
+		port = config.DefaultWorkerPort
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -60,7 +60,7 @@ func (s *server) start() error {
 func (s *server) stop() error {
 	s.cancel()
 	if s.httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), config.DefaultServerShutdownTimeout)
 		defer cancel()
 		return s.httpServer.Shutdown(ctx)
 	}
