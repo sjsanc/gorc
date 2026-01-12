@@ -1,5 +1,7 @@
 package node
 
+import "github.com/sjsanc/gorc/metrics"
+
 type Node struct {
 	// Hostname of the machine.
 	Hostname string
@@ -9,6 +11,8 @@ type Node struct {
 	WorkerPort int
 	// Port that the manager is listening on.
 	ManagerPort int
+	// System metrics for this node.
+	Metrics *metrics.Metrics `json:"metrics,omitempty"`
 }
 
 func NewNode(hostname string, address string, workerPort int, managerPort int) *Node {

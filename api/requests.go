@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/google/uuid"
+	"github.com/sjsanc/gorc/metrics"
 )
 
 // RegisterWorkerRequest is the request payload for registering a Worker with the Manager.
@@ -24,6 +25,12 @@ type TaskStatusUpdateRequest struct {
 	State       string `json:"state"`                 // "running", "completed", "failed"
 	ContainerID string `json:"containerId,omitempty"` // Docker container ID
 	Error       string `json:"error,omitempty"`       // Error message if failed
+}
+
+// NodeMetricsUpdateRequest is the request payload for updating node metrics from nodes to Manager.
+type NodeMetricsUpdateRequest struct {
+	Hostname string           `json:"hostname"`
+	Metrics  *metrics.Metrics `json:"metrics"`
 }
 
 // DeployRequest is the request payload for deploying a new task via the Manager API.

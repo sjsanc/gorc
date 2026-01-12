@@ -69,6 +69,7 @@ func (s *server) initRouter() {
 	s.router.Get("/health", s.handleHealth)
 	s.router.Route("/node", func(r chi.Router) {
 		r.Get("/", s.handleListNodes)
+		r.Put("/{hostname}/metrics", s.handleUpdateNodeMetrics)
 	})
 	s.router.Route("/worker", func(r chi.Router) {
 		r.Get("/", s.handleListWorkers)
@@ -106,6 +107,34 @@ func (s *server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(nodes)
+}
+
+// PUT /node/{hostname}/metrics
+//
+// Update node metrics (called by nodes to push metrics)
+func (s *server) handleUpdateNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	hostname := chi.URLParam(r, "hostname")
+	if hostname == "" {
+		http.Error(w, "hostname is required", http.StatusBadRequest)
+		return
+	}
+
+	var req api.NodeMetricsUpdateRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	err = s.manager.updateNodeMetrics(hostname, req.Metrics)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error updating metrics: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "metrics_updated"})
 }
 
 // GET /worker

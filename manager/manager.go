@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
+	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/storage"
@@ -42,6 +43,8 @@ type Manager struct {
 	workers storage.Store[ManagedWorker]
 	// `tasks` is a store of all tasks, keyed by task `id`.
 	tasks storage.Store[task.Task]
+	// `metricsCollector` collects system metrics for this manager node.
+	metricsCollector metrics.Collector
 	// `ctx` is the context for the Manager and its background goroutines.
 	ctx context.Context
 	// `cancel` cancels the Manager context.
@@ -73,17 +76,23 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 		return nil, fmt.Errorf("error creating tasks store: %v", err)
 	}
 
+	collector, err := metrics.NewSystemCollector()
+	if err != nil {
+		return nil, fmt.Errorf("error creating metrics collector: %v", err)
+	}
+
 	// Create a new Manager instance
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		logger:  logger,
-		server:  nil,
-		node:    n,
-		nodes:   nodesStore,
-		workers: workersStore,
-		tasks:   tasksStore,
-		ctx:     ctx,
-		cancel:  cancel,
+		logger:           logger,
+		server:           nil,
+		node:             n,
+		nodes:            nodesStore,
+		workers:          workersStore,
+		tasks:            tasksStore,
+		metricsCollector: collector,
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	// Register the Manager node
@@ -106,6 +115,9 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 func (m *Manager) Run() error {
 	// Start detecting dead workers: timeout 30 seconds, check every 10 seconds
 	m.detectDeadWorkers(config.DefaultHeartbeatTimeout, config.DefaultHeartbeatCheck)
+
+	// Start collecting metrics for this manager node
+	go m.collectAndStoreMetrics()
 
 	if err := m.server.start(); err != nil {
 		return fmt.Errorf("error starting server: %v", err)
@@ -163,12 +175,19 @@ func (m *Manager) registerWorker(req api.RegisterWorkerRequest) (*ManagedWorker,
 		address = "127.0.0.1"
 	}
 
+	// Register/update node for this worker
+	workerNode := node.NewNode(req.WorkerName, address, req.WorkerPort, 0)
+	registeredNode, err := m.registerNode(workerNode)
+	if err != nil {
+		m.logger.Warnf("failed to register node for worker %s: %v", req.WorkerName, err)
+	}
+
 	mw := &ManagedWorker{
 		ID:            id,
 		Name:          req.WorkerName,
 		Address:       address,
 		Port:          req.WorkerPort,
-		Node:          nil, // Node registration handled separately if needed
+		Node:          registeredNode,
 		LastHeartbeat: time.Now(),
 	}
 
@@ -377,4 +396,52 @@ func (m *Manager) detectDeadWorkers(heartbeatTimeout time.Duration, checkInterva
 			}
 		}
 	}()
+}
+
+func (m *Manager) collectAndStoreMetrics() {
+	ticker := time.NewTicker(config.DefaultHeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			metrics, err := m.metricsCollector.Collect()
+			if err != nil {
+				m.logger.Warnf("failed to collect manager metrics: %v", err)
+				continue
+			}
+
+			node, err := m.nodes.Get(m.node.Hostname)
+			if err != nil || node == nil {
+				m.logger.Errorf("failed to get manager node: %v", err)
+				continue
+			}
+
+			node.Metrics = metrics
+			err = m.nodes.Put(m.node.Hostname, node)
+			if err != nil {
+				m.logger.Errorf("failed to update manager node metrics: %v", err)
+			}
+		}
+	}
+}
+
+func (m *Manager) updateNodeMetrics(hostname string, metrics *metrics.Metrics) error {
+	node, err := m.nodes.Get(hostname)
+	if err != nil {
+		return fmt.Errorf("error getting node: %v", err)
+	}
+	if node == nil {
+		return fmt.Errorf("node not found: %s", hostname)
+	}
+
+	node.Metrics = metrics
+	err = m.nodes.Put(hostname, node)
+	if err != nil {
+		return fmt.Errorf("error updating node metrics: %v", err)
+	}
+
+	return nil
 }

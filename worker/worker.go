@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
+	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/task"
@@ -36,6 +37,8 @@ type Worker struct {
 	events *utils.Queue[task.Event]
 	// `runtime` is the container runtime for executing tasks.
 	runtime runtime.Runtime
+	// `metricsCollector` collects system metrics for this worker node.
+	metricsCollector metrics.Collector
 	// `ctx` is the context for the Worker and its background goroutines.
 	ctx context.Context
 	// `cancel` cancels the Worker context.
@@ -57,18 +60,24 @@ func NewWorker(logger *zap.SugaredLogger, addr string, port int, managerAddr str
 		return nil, fmt.Errorf("error creating runtime: %v", err)
 	}
 
+	collector, err := metrics.NewSystemCollector()
+	if err != nil {
+		return nil, fmt.Errorf("error creating metrics collector: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &Worker{
-		id:          uuid.New(),
-		logger:      logger,
-		server:      nil,
-		name:        hn,
-		node:        n,
-		managerAddr: managerAddr,
-		events:      utils.NewQueue[task.Event](),
-		runtime:     rt,
-		ctx:         ctx,
-		cancel:      cancel,
+		id:               uuid.New(),
+		logger:           logger,
+		server:           nil,
+		name:             hn,
+		node:             n,
+		managerAddr:      managerAddr,
+		events:           utils.NewQueue[task.Event](),
+		runtime:          rt,
+		metricsCollector: collector,
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 
 	w.server = newServer(w, addr, port)
@@ -312,6 +321,13 @@ func (w *Worker) sendHeartbeats() {
 		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
+			// Collect metrics
+			m, err := w.metricsCollector.Collect()
+			if err != nil {
+				w.logger.Warnf("failed to collect metrics: %v", err)
+			}
+
+			// Send heartbeat
 			endpoint := fmt.Sprintf("http://%s/worker/%s/heartbeat", w.managerAddr, w.id.String())
 			httpReq, err := http.NewRequest("POST", endpoint, nil)
 			if err != nil {
@@ -330,6 +346,44 @@ func (w *Worker) sendHeartbeats() {
 			if resp.StatusCode != http.StatusOK {
 				w.logger.Warnf("manager rejected heartbeat, status code: %d", resp.StatusCode)
 			}
+
+			// Push metrics if collection succeeded
+			if m != nil {
+				w.pushMetrics(m)
+			}
 		}
+	}
+}
+
+func (w *Worker) pushMetrics(m *metrics.Metrics) {
+	req := api.NodeMetricsUpdateRequest{
+		Hostname: w.node.Hostname,
+		Metrics:  m,
+	}
+
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		w.logger.Errorf("error marshaling metrics: %v", err)
+		return
+	}
+
+	endpoint := fmt.Sprintf("http://%s/node/%s/metrics", w.managerAddr, w.node.Hostname)
+	httpReq, err := http.NewRequest("PUT", endpoint, bytes.NewBuffer(jsonData))
+	if err != nil {
+		w.logger.Errorf("error creating metrics request: %v", err)
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: config.DefaultHTTPClientTimeout}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		w.logger.Warnf("failed to send metrics to manager: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		w.logger.Warnf("manager rejected metrics, status code: %d", resp.StatusCode)
 	}
 }
