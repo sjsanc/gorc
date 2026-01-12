@@ -67,8 +67,6 @@ var managerCmd = &cli.Command{
 			return err
 		}
 
-		m.Run()
-
-		return nil
+		return m.Run()
 	},
 }

@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -17,36 +19,50 @@ type server struct {
 	port       int
 	router     *chi.Mux
 	httpServer *http.Server
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 func newServer(worker *Worker, address string, port int) *server {
 	if address == "" {
-		address = ""
+		address = "0.0.0.0"
 	}
 
 	if port == 0 {
 		port = 5556
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &server{
 		worker:  worker,
 		address: address,
 		port:    port,
 		router:  chi.NewRouter(),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
-func (s *server) start() {
+func (s *server) start() error {
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", s.address, s.port),
 		Handler: s.router,
 	}
-	s.httpServer.ListenAndServe()
+	go func() {
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.worker.logger.Errorf("server error: %v", err)
+		}
+	}()
+	return nil
 }
 
 func (s *server) stop() error {
+	s.cancel()
 	if s.httpServer != nil {
-		return s.httpServer.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.httpServer.Shutdown(ctx)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,6 +41,10 @@ type Manager struct {
 	workers storage.Store[ManagedWorker]
 	// `tasks` is a store of all tasks, keyed by task `id`.
 	tasks storage.Store[task.Task]
+	// `ctx` is the context for the Manager and its background goroutines.
+	ctx context.Context
+	// `cancel` cancels the Manager context.
+	cancel context.CancelFunc
 }
 
 func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType storage.StorageType, runtimeType runtime.RuntimeType) (*Manager, error) {
@@ -51,14 +56,33 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 
 	n := node.NewNode(hn, addr, 0, port)
 
+	// Create stores with error handling
+	nodesStore, err := storage.NewStore[node.Node](storageType)
+	if err != nil {
+		return nil, fmt.Errorf("error creating nodes store: %v", err)
+	}
+
+	workersStore, err := storage.NewStore[ManagedWorker](storageType)
+	if err != nil {
+		return nil, fmt.Errorf("error creating workers store: %v", err)
+	}
+
+	tasksStore, err := storage.NewStore[task.Task](storageType)
+	if err != nil {
+		return nil, fmt.Errorf("error creating tasks store: %v", err)
+	}
+
 	// Create a new Manager instance
+	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		logger:  logger,
 		server:  nil,
 		node:    n,
-		nodes:   storage.NewStore[node.Node](storageType),
-		workers: storage.NewStore[ManagedWorker](storageType),
-		tasks:   storage.NewStore[task.Task](storageType),
+		nodes:   nodesStore,
+		workers: workersStore,
+		tasks:   tasksStore,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Register the Manager node
@@ -77,15 +101,23 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 }
 
 // Run starts the Manager API server and health checking for workers.
-func (m *Manager) Run() {
+// This method blocks until Stop() is called.
+func (m *Manager) Run() error {
 	// Start detecting dead workers: timeout 30 seconds, check every 10 seconds
 	m.detectDeadWorkers(30*time.Second, 10*time.Second)
 
-	m.server.start()
+	if err := m.server.start(); err != nil {
+		return fmt.Errorf("error starting server: %v", err)
+	}
+
+	// Block until context is cancelled
+	<-m.ctx.Done()
+	return nil
 }
 
-// Stop closes the Manager API server.
+// Stop gracefully shuts down the Manager and all background goroutines.
 func (m *Manager) Stop() error {
+	m.cancel()
 	return m.server.stop()
 }
 
@@ -183,7 +215,7 @@ func (m *Manager) updateTaskState(id uuid.UUID, state task.TaskState) error {
 	if err != nil {
 		return err
 	}
-	t.State = state
+	t.SetState(state)
 	err = m.tasks.Put(id.String(), t)
 	if err != nil {
 		return fmt.Errorf("error updating task state: %v", err)
@@ -206,23 +238,18 @@ func (m *Manager) updateTaskStatus(taskIDStr string, req api.TaskStatusUpdateReq
 	// Update task state based on request
 	switch req.State {
 	case "running":
-		t.State = task.TaskRunning
+		t.SetState(task.TaskRunning)
 	case "completed":
-		t.State = task.TaskCompleted
+		t.MarkCompleted()
 	case "failed":
-		t.State = task.TaskFailed
+		t.SetError(req.Error)
 	default:
 		return fmt.Errorf("invalid task state: %s", req.State)
 	}
 
 	// Update container ID if provided
 	if req.ContainerID != "" {
-		t.ContainerID = req.ContainerID
-	}
-
-	// Update error message if provided
-	if req.Error != "" {
-		t.Error = req.Error
+		t.SetContainerID(req.ContainerID)
 	}
 
 	// Save updated task
@@ -256,7 +283,7 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 
 	// Simple scheduling: pick the first worker (MVP strategy)
 	worker := workers[0]
-	t.WorkerID = worker.ID
+	t.SetWorkerID(worker.ID)
 
 	// Update task in store with assigned worker
 	err = m.tasks.Put(t.ID.String(), t)
@@ -289,7 +316,7 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 	}
 
 	// Update task state to Running
-	t.State = task.TaskRunning
+	t.SetState(task.TaskRunning)
 	err = m.tasks.Put(t.ID.String(), t)
 	if err != nil {
 		return fmt.Errorf("error updating task state: %v", err)
@@ -325,20 +352,25 @@ func (m *Manager) detectDeadWorkers(heartbeatTimeout time.Duration, checkInterva
 		ticker := time.NewTicker(checkInterval)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			workers, err := m.listWorkers()
-			if err != nil {
-				m.logger.Errorf("error listing workers for dead worker detection: %v", err)
-				continue
-			}
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				workers, err := m.listWorkers()
+				if err != nil {
+					m.logger.Errorf("error listing workers for dead worker detection: %v", err)
+					continue
+				}
 
-			now := time.Now()
-			for _, worker := range workers {
-				if now.Sub(worker.LastHeartbeat) > heartbeatTimeout {
-					m.logger.Warnf("Worker %s (%s) is dead (no heartbeat for %v), removing", worker.Name, worker.ID.String(), now.Sub(worker.LastHeartbeat))
-					err := m.workers.Delete(worker.ID.String())
-					if err != nil {
-						m.logger.Errorf("error removing dead worker %s: %v", worker.ID.String(), err)
+				now := time.Now()
+				for _, worker := range workers {
+					if now.Sub(worker.LastHeartbeat) > heartbeatTimeout {
+						m.logger.Warnf("Worker %s (%s) is dead (no heartbeat for %v), removing", worker.Name, worker.ID.String(), now.Sub(worker.LastHeartbeat))
+						err := m.workers.Delete(worker.ID.String())
+						if err != nil {
+							m.logger.Errorf("error removing dead worker %s: %v", worker.ID.String(), err)
+						}
 					}
 				}
 			}

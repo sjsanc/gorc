@@ -190,3 +190,52 @@ func TestTaskEventProcessing(t *testing.T) {
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	t.Logf("✓ Worker received and processed task event. Tasks: %s", string(bodyBytes))
 }
+
+// Feature 6: Graceful Shutdown
+func TestGracefulShutdown(t *testing.T) {
+	logger := zap.NewNop()
+	sugar := logger.Sugar()
+
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5510, storage.StorageInMemory, runtime.RuntimeDocker)
+	if err != nil {
+		t.Fatalf("Failed to create Manager: %v", err)
+	}
+
+	// Start manager in goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Run()
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify manager is responding
+	resp, err := http.Get("http://0.0.0.0:5510/health")
+	if err != nil {
+		t.Fatalf("Manager not responding: %v", err)
+	}
+	resp.Body.Close()
+
+	// Gracefully stop the manager
+	stopErr := m.Stop()
+	if stopErr != nil {
+		t.Fatalf("Failed to stop manager: %v", stopErr)
+	}
+
+	// Wait for Run() to return
+	select {
+	case <-done:
+		t.Log("✓ Manager shutdown gracefully")
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Manager did not shut down within timeout")
+	}
+
+	// Verify manager is no longer responding
+	time.Sleep(100 * time.Millisecond)
+	_, err = http.Get("http://0.0.0.0:5510/health")
+	if err == nil {
+		t.Fatalf("Manager should not be responding after shutdown")
+	}
+
+	t.Log("✓ Manager confirmed offline after graceful shutdown")
+}

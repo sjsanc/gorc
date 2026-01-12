@@ -1,6 +1,10 @@
 package storage
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/sjsanc/gorc/task"
+)
 
 type memoryStore[T any] struct {
 	db map[string]*T
@@ -16,14 +20,33 @@ func newMemoryStore[T any]() *memoryStore[T] {
 func (s *memoryStore[T]) Put(key string, value *T) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.db[key] = value
+
+	// Defensive copy for Task type to prevent external modifications
+	if t, ok := any(value).(*task.Task); ok {
+		cloned := t.Clone()
+		s.db[key] = any(cloned).(*T)
+	} else {
+		s.db[key] = value
+	}
+
 	return nil
 }
 
 func (s *memoryStore[T]) Get(key string) (*T, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	value, _ := s.db[key]
+
+	value, exists := s.db[key]
+	if !exists {
+		return nil, nil
+	}
+
+	// Defensive copy for Task type to prevent aliasing
+	if t, ok := any(value).(*task.Task); ok {
+		cloned := t.Clone()
+		return any(cloned).(*T), nil
+	}
+
 	return value, nil
 }
 

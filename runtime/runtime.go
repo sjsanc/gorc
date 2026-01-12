@@ -20,7 +20,7 @@ func NewRuntime(runtimeType RuntimeType) (Runtime, error) {
 	case RuntimeDocker:
 		return newDockerRuntime()
 	default:
-		panic("Unknown runtime type")
+		return nil, fmt.Errorf("unknown runtime type: %s", runtimeType)
 	}
 }
 

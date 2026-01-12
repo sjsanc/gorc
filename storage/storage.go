@@ -16,12 +16,12 @@ type Store[T any] interface {
 	Delete(key string) error
 }
 
-func NewStore[T any](storageType StorageType) Store[T] {
+func NewStore[T any](storageType StorageType) (Store[T], error) {
 	switch storageType {
 	case StorageInMemory:
-		return newMemoryStore[T]()
+		return newMemoryStore[T](), nil
 	default:
-		panic("Unknown store type")
+		return nil, fmt.Errorf("unknown storage type: %s", storageType)
 	}
 }
 

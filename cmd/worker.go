@@ -71,8 +71,6 @@ var workerCmd = &cli.Command{
 			return err
 		}
 
-		w.Run()
-
-		return nil
+		return w.Run()
 	},
 }
