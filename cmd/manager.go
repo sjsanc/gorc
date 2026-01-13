@@ -6,11 +6,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/sjsanc/gorc/logger"
 	"github.com/sjsanc/gorc/manager"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/storage"
 	"github.com/urfave/cli/v2"
-	"go.uber.org/zap"
 )
 
 var managerCmd = &cli.Command{
@@ -43,10 +43,6 @@ var managerCmd = &cli.Command{
 		},
 	},
 	Action: func(c *cli.Context) error {
-		logger, _ := zap.NewProduction()
-		defer logger.Sync()
-		sugar := logger.Sugar()
-
 		addr := c.String("address")
 		port := c.Int("port")
 
@@ -64,7 +60,7 @@ var managerCmd = &cli.Command{
 			return err
 		}
 
-		m, err := manager.NewManager(sugar, addr, port, storageType, runtimeType)
+		m, err := manager.NewManager(logger.Log, addr, port, storageType, runtimeType)
 		if err != nil {
 			fmt.Println("Error creating manager:", err)
 			return err
@@ -83,9 +79,9 @@ var managerCmd = &cli.Command{
 		// Wait for shutdown signal or error
 		select {
 		case sig := <-sigChan:
-			sugar.Infof("Received signal %v, shutting down gracefully...", sig)
+			logger.Log.Infof("Received signal %v, shutting down gracefully...", sig)
 			if err := m.Stop(); err != nil {
-				sugar.Errorf("Error during shutdown: %v", err)
+				logger.Log.Errorf("Error during shutdown: %v", err)
 				return err
 			}
 			fmt.Println("Manager shut down successfully")

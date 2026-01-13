@@ -6,10 +6,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/sjsanc/gorc/logger"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/worker"
 	"github.com/urfave/cli/v2"
-	"go.uber.org/zap"
 )
 
 var workerCmd = &cli.Command{
@@ -42,10 +42,6 @@ var workerCmd = &cli.Command{
 		},
 	},
 	Action: func(c *cli.Context) error {
-		logger, _ := zap.NewProduction()
-		defer logger.Sync()
-		sugar := logger.Sugar()
-
 		addr := c.String("address")
 		port := c.Int("port")
 		managerAddr := c.String("manager")
@@ -68,7 +64,7 @@ var workerCmd = &cli.Command{
 
 		fmt.Printf("Starting Gorc Worker on %s:%d\n", addr, port)
 
-		w, err := worker.NewWorker(sugar, addr, port, managerAddr, runtimeType)
+		w, err := worker.NewWorker(logger.Log, addr, port, managerAddr, runtimeType)
 		if err != nil {
 			fmt.Println("Error starting worker:", err)
 			return err
@@ -87,9 +83,9 @@ var workerCmd = &cli.Command{
 		// Wait for shutdown signal or error
 		select {
 		case sig := <-sigChan:
-			sugar.Infof("Received signal %v, shutting down gracefully...", sig)
+			logger.Log.Infof("Received signal %v, shutting down gracefully...", sig)
 			if err := w.Stop(); err != nil {
-				sugar.Errorf("Error during shutdown: %v", err)
+				logger.Log.Errorf("Error during shutdown: %v", err)
 				return err
 			}
 			fmt.Println("Worker shut down successfully")
