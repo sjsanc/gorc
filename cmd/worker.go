@@ -37,7 +37,7 @@ var workerCmd = &cli.Command{
 		&cli.StringFlag{
 			Name:    "runtime",
 			Aliases: []string{"r"},
-			Usage:   "Container runtime to use (docker)",
+			Usage:   "Container runtime to use (docker, podman)",
 			Value:   "docker",
 		},
 	},

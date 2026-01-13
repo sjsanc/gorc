@@ -38,7 +38,7 @@ var managerCmd = &cli.Command{
 		&cli.StringFlag{
 			Name:    "runtime",
 			Aliases: []string{"r"},
-			Usage:   "Container runtime to use for the Manager",
+			Usage:   "Container runtime to use (docker, podman)",
 			Value:   "docker",
 		},
 	},

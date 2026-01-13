@@ -407,5 +407,7 @@ func isContainerNotFoundError(err error) bool {
 		return false
 	}
 	errStr := err.Error()
-	return strings.Contains(errStr, "No such container") || strings.Contains(errStr, "not found")
+	return strings.Contains(errStr, "No such container") ||
+		strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "no container with")
 }

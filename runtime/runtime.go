@@ -6,6 +6,7 @@ type RuntimeType string
 
 const (
 	RuntimeDocker RuntimeType = "docker"
+	RuntimePodman RuntimeType = "podman"
 )
 
 type Runtime interface {
@@ -19,6 +20,8 @@ func NewRuntime(runtimeType RuntimeType) (Runtime, error) {
 	switch runtimeType {
 	case RuntimeDocker:
 		return newDockerRuntime()
+	case RuntimePodman:
+		return newPodmanRuntime()
 	default:
 		return nil, fmt.Errorf("unknown runtime type: %s", runtimeType)
 	}
@@ -28,6 +31,8 @@ func ParseRuntimeType(s string) (RuntimeType, error) {
 	switch s {
 	case "docker":
 		return RuntimeDocker, nil
+	case "podman":
+		return RuntimePodman, nil
 	default:
 		return "", fmt.Errorf("unknown runtime type: %s", s)
 	}
