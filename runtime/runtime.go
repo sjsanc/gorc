@@ -9,7 +9,7 @@ const (
 )
 
 type Runtime interface {
-	Start(image string, taskID string) (containerID string, err error)
+	Start(image string, taskID string, args []string) (containerID string, err error)
 	Stop(containerID string) error
 	Status(containerID string) (string, error)
 	Wait(containerID string) (exitCode int64, err error)

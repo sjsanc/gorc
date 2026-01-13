@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -184,7 +185,7 @@ func (w *Worker) processEvents() {
 func (w *Worker) handleDeploy(t *task.Task) {
 	w.logger.Infof("Deploying task: %s (image: %s)", t.Name, t.Image)
 
-	containerID, err := w.runtime.Start(t.Image, t.ID.String())
+	containerID, err := w.runtime.Start(t.Image, t.ID.String(), t.Args)
 	if err != nil {
 		w.logger.Errorf("Failed to start task %s: %v", t.Name, err)
 		t.SetError(err.Error())
@@ -260,19 +261,31 @@ func (w *Worker) handleStop(t *task.Task) {
 	w.logger.Infof("Stopping task: %s (container: %s)", t.Name, containerID)
 
 	if containerID == "" {
-		w.logger.Warnf("Task %s has no container ID, skipping stop", t.Name)
+		w.logger.Warnf("Task %s has no container ID, marking completed", t.Name)
+		t.MarkCompleted()
+		w.reportTaskStatus(t.ID, "completed", "", "")
 		return
 	}
 
 	err := w.runtime.Stop(containerID)
 	if err != nil {
+		// Check if container already gone (idempotent)
+		if isContainerNotFoundError(err) {
+			w.logger.Warnf("Container already removed for task %s", t.Name)
+			t.MarkCompleted()
+			w.reportTaskStatus(t.ID, "completed", containerID, "")
+			return
+		}
+
 		w.logger.Errorf("Failed to stop task %s: %v", t.Name, err)
 		t.SetError(err.Error())
+		w.reportTaskStatus(t.ID, "failed", containerID, err.Error())
 		return
 	}
 
 	w.logger.Infof("Task %s stopped successfully", t.Name)
 	t.MarkCompleted()
+	w.reportTaskStatus(t.ID, "completed", containerID, "")
 }
 
 // reportTaskStatus sends a task status update to the Manager via HTTP PUT request.
@@ -386,4 +399,13 @@ func (w *Worker) pushMetrics(m *metrics.Metrics) {
 	if resp.StatusCode != http.StatusOK {
 		w.logger.Warnf("manager rejected metrics, status code: %d", resp.StatusCode)
 	}
+}
+
+// isContainerNotFoundError checks if the error is due to container not being found.
+func isContainerNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "No such container") || strings.Contains(errStr, "not found")
 }

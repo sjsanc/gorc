@@ -70,6 +70,7 @@ func (s *server) stop() error {
 func (s *server) initRouter() {
 	s.router.Route("/tasks", func(r chi.Router) {
 		r.Post("/", s.handleDeployTask)
+		r.Post("/{taskID}/stop", s.handleStopTask)
 	})
 }
 
@@ -90,10 +91,37 @@ func (s *server) handleDeployTask(w http.ResponseWriter, r *http.Request) {
 		ID:    taskID,
 		Name:  req.Name,
 		Image: req.Image,
+		Args:  req.Args,
 		State: task.TaskPending,
 	}
 
 	event := task.Event{Task: t, Action: task.DeployEvent}
+	s.worker.events.Enqueue(event)
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+}
+
+func (s *server) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	taskIDStr := chi.URLParam(r, "taskID")
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		http.Error(w, "invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	var req api.StopTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	t := &task.Task{
+		ID: taskID,
+	}
+	t.SetContainerID(req.ContainerID)
+
+	event := task.Event{Task: t, Action: task.StopEvent}
 	s.worker.events.Enqueue(event)
 
 	w.WriteHeader(http.StatusAccepted)

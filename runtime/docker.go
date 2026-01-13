@@ -28,7 +28,7 @@ func newDockerRuntime() (*dockerRuntime, error) {
 	}, nil
 }
 
-func (r *dockerRuntime) Start(imageName string, taskID string) (string, error) {
+func (r *dockerRuntime) Start(imageName string, taskID string, args []string) (string, error) {
 	// Pull the image
 	reader, err := r.dockerClient.ImagePull(r.ctx, imageName, image.PullOptions{})
 	if err != nil {
@@ -44,6 +44,11 @@ func (r *dockerRuntime) Start(imageName string, taskID string) (string, error) {
 		Labels: map[string]string{
 			"gorc.task.id": taskID,
 		},
+	}
+
+	// Set Cmd only if args provided (otherwise use image default)
+	if len(args) > 0 {
+		containerConfig.Cmd = args
 	}
 
 	resp, err := r.dockerClient.ContainerCreate(r.ctx, containerConfig, nil, nil, nil, fmt.Sprintf("gorc-task-%s", taskID))

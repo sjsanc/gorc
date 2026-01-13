@@ -239,3 +239,132 @@ func TestGracefulShutdown(t *testing.T) {
 
 	t.Log("✓ Manager confirmed offline after graceful shutdown")
 }
+
+// Feature: Deploy with Custom Arguments
+func TestDeployWithCustomArgs(t *testing.T) {
+	logger := zap.NewNop()
+	sugar := logger.Sugar()
+
+	// Start Manager
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5520, storage.StorageInMemory, runtime.RuntimeDocker)
+	if err != nil {
+		t.Fatalf("Failed to create Manager: %v", err)
+	}
+
+	go m.Run()
+	defer m.Stop()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Start Worker
+	w, err := worker.NewWorker(sugar, "0.0.0.0", 5521, "0.0.0.0:5520", runtime.RuntimeDocker)
+	if err != nil {
+		t.Fatalf("Failed to create Worker: %v", err)
+	}
+
+	go w.Run()
+	defer w.Stop()
+
+	time.Sleep(1 * time.Second)
+
+	// Deploy task with custom args
+	deployReq := api.DeployRequest{
+		Name:  "test-custom-args",
+		Image: "alpine:latest",
+		Args:  []string{"sh", "-c", "sleep 10"},
+	}
+
+	jsonData, err := json.Marshal(deployReq)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	resp, err := http.Post("http://0.0.0.0:5520/tasks", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to deploy task with args: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expected status 201, got %d. Body: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]string
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	taskID := result["task_id"]
+	if taskID == "" {
+		t.Fatalf("Task ID not returned in response")
+	}
+
+	// Wait for task to be processed by worker
+	time.Sleep(2 * time.Second)
+
+	// Verify task was created with correct args
+	tasksResp, err := http.Get("http://0.0.0.0:5520/tasks")
+	if err != nil {
+		t.Fatalf("Failed to get tasks: %v", err)
+	}
+	defer tasksResp.Body.Close()
+
+	var tasks []interface{}
+	err = json.NewDecoder(tasksResp.Body).Decode(&tasks)
+	if err != nil {
+		t.Fatalf("Failed to parse tasks response: %v", err)
+	}
+
+	found := false
+	for _, taskInterface := range tasks {
+		task, ok := taskInterface.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		taskName, ok := task["Name"].(string)
+		if !ok || taskName != "test-custom-args" {
+			continue
+		}
+
+		found = true
+		args, ok := task["Args"].([]interface{})
+		if !ok {
+			// Args might be nil or empty
+			if task["Args"] == nil {
+				t.Errorf("Args field is nil in task response")
+			} else {
+				t.Errorf("Args field has unexpected type in task response: %T", task["Args"])
+			}
+			break
+		}
+
+		// Verify args match what we sent
+		expectedArgs := []string{"sh", "-c", "sleep 10"}
+		if len(args) != len(expectedArgs) {
+			t.Errorf("Expected %d args, got %d", len(expectedArgs), len(args))
+			break
+		}
+
+		for i, arg := range args {
+			argStr, ok := arg.(string)
+			if !ok {
+				t.Errorf("Arg %d has unexpected type: %T", i, arg)
+				continue
+			}
+			if argStr != expectedArgs[i] {
+				t.Errorf("Arg %d: expected %s, got %s", i, expectedArgs[i], argStr)
+			}
+		}
+
+		break
+	}
+
+	if !found {
+		t.Fatalf("Task with custom args not found in task list. Tasks: %v", tasks)
+	}
+
+	t.Log("✓ Task deployed successfully with custom arguments")
+}

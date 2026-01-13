@@ -209,8 +209,8 @@ func (m *Manager) listWorkers() ([]*ManagedWorker, error) {
 	return workers, nil
 }
 
-func (m *Manager) createTask(name, image string) (*task.Task, error) {
-	t := task.NewTask(name, image)
+func (m *Manager) createTask(name, image string, args []string) (*task.Task, error) {
+	t := task.NewTask(name, image, args)
 	err := m.tasks.Put(t.ID.String(), t)
 	if err != nil {
 		return nil, fmt.Errorf("error creating task: %v", err)
@@ -316,6 +316,7 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 		TaskID: t.ID.String(),
 		Name:   t.Name,
 		Image:  t.Image,
+		Args:   t.Args,
 	}
 
 	jsonData, err := json.Marshal(deployReq)
@@ -343,6 +344,50 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 	}
 
 	m.logger.Infof("Task %s scheduled to worker %s", t.Name, worker.Name)
+	return nil
+}
+
+// stopTask sends a stop request to the worker running the specified task.
+func (m *Manager) stopTask(taskID uuid.UUID) error {
+	t, err := m.getTask(taskID)
+	if err != nil {
+		return err
+	}
+
+	if t.State != task.TaskRunning {
+		return fmt.Errorf("task not running (current state: %v)", t.State)
+	}
+
+	worker, err := m.workers.Get(t.WorkerID.String())
+	if err != nil {
+		return fmt.Errorf("error getting worker: %v", err)
+	}
+	if worker == nil {
+		return fmt.Errorf("worker not found for task")
+	}
+
+	stopReq := api.StopTaskRequest{
+		TaskID:      taskID.String(),
+		ContainerID: t.GetContainerID(),
+	}
+
+	jsonData, err := json.Marshal(stopReq)
+	if err != nil {
+		return fmt.Errorf("error marshaling stop request: %v", err)
+	}
+
+	workerEndpoint := fmt.Sprintf("http://%s:%d/tasks/%s/stop", worker.Address, worker.Port, taskID.String())
+	resp, err := http.Post(workerEndpoint, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to contact worker: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("worker rejected stop request: %d", resp.StatusCode)
+	}
+
+	m.logger.Infof("Stop request sent to worker for task %s", t.Name)
 	return nil
 }
 

@@ -16,6 +16,7 @@ func Exec() {
 			workerCmd,
 			listCmd,
 			deployCmd,
+			stopCmd,
 		},
 	}
 

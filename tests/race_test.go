@@ -10,7 +10,7 @@ import (
 
 // TestConcurrentTaskModifications verifies that concurrent Task modifications are safe.
 func TestConcurrentTaskModifications(t *testing.T) {
-	tk := task.NewTask("test-concurrent", "alpine:latest")
+	tk := task.NewTask("test-concurrent", "alpine:latest", nil)
 	var wg sync.WaitGroup
 
 	// Spawn 20 goroutines modifying task concurrently
@@ -38,7 +38,7 @@ func TestConcurrentTaskModifications(t *testing.T) {
 // TestStorageTaskIsolation verifies that modifications to retrieved tasks don't affect stored copies.
 func TestStorageTaskIsolation(t *testing.T) {
 	store, _ := storage.NewStore[task.Task](storage.StorageInMemory)
-	originalTask := task.NewTask("test-isolation", "alpine:latest")
+	originalTask := task.NewTask("test-isolation", "alpine:latest", nil)
 	originalTask.MarkRunning("original-container")
 
 	// Put task in storage
@@ -72,7 +72,7 @@ func TestConcurrentStorageAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				tk := task.NewTask("test", "alpine:latest")
+				tk := task.NewTask("test", "alpine:latest", nil)
 				tk.SetState(task.TaskRunning)
 				store.Put("task", tk)
 			}
@@ -109,7 +109,7 @@ func TestConcurrentStorageAccess(t *testing.T) {
 
 // TestTaskSetterConsistency verifies that compound operations are atomic.
 func TestTaskSetterConsistency(t *testing.T) {
-	tk := task.NewTask("test-consistency", "alpine:latest")
+	tk := task.NewTask("test-consistency", "alpine:latest", nil)
 	var wg sync.WaitGroup
 
 	// Spawn goroutines calling MarkRunning and MarkCompleted concurrently

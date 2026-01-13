@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
 )
@@ -80,6 +82,7 @@ func (s *server) initRouter() {
 		r.Post("/", s.handleCreateTask)
 		r.Get("/", s.handleListTasks)
 		r.Put("/{taskID}/status", s.handleUpdateTaskStatus)
+		r.Delete("/{taskID}", s.handleStopTask)
 	})
 }
 
@@ -203,10 +206,7 @@ func (s *server) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 //
 // Create and schedule a new task
 func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name  string `json:"name"`
-		Image string `json:"image"`
-	}
+	var req api.DeployRequest
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
@@ -220,7 +220,7 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create the task
-	t, err := s.manager.createTask(req.Name, req.Image)
+	t, err := s.manager.createTask(req.Name, req.Image, req.Args)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("error creating task: %v", err), http.StatusInternalServerError)
 		return
@@ -283,4 +283,63 @@ func (s *server) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// DELETE /tasks/{taskID}
+//
+// Stop a running task
+func (s *server) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	taskIDStr := chi.URLParam(r, "taskID")
+	if taskIDStr == "" {
+		http.Error(w, "task ID is required", http.StatusBadRequest)
+		return
+	}
+
+	taskID, err := parseUUID(taskIDStr)
+	if err != nil {
+		http.Error(w, "invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	err = s.manager.stopTask(taskID)
+	if err != nil {
+		if isNotFoundError(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else if isNotRunningError(err) || isWorkerNotFoundError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else if isContactWorkerError(err) {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, fmt.Sprintf("error stopping task: %v", err), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "stop initiated",
+		"task_id": taskIDStr,
+	})
+}
+
+// Helper functions for error parsing
+func parseUUID(s string) (uuid.UUID, error) {
+	return uuid.Parse(s)
+}
+
+func isNotFoundError(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "not exist"))
+}
+
+func isNotRunningError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not running")
+}
+
+func isWorkerNotFoundError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "worker not found")
+}
+
+func isContactWorkerError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "failed to contact worker")
 }

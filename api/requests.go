@@ -15,9 +15,16 @@ type RegisterWorkerRequest struct {
 
 // DeployTaskRequest is the request payload for deploying a task to a Worker.
 type DeployTaskRequest struct {
-	TaskID string `json:"task_id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
+	TaskID string   `json:"task_id"`
+	Name   string   `json:"name"`
+	Image  string   `json:"image"`
+	Args   []string `json:"args,omitempty"`
+}
+
+// StopTaskRequest is the request payload for stopping a task on a Worker.
+type StopTaskRequest struct {
+	TaskID      string `json:"task_id"`
+	ContainerID string `json:"container_id"`
 }
 
 // TaskStatusUpdateRequest is the request payload for updating task status from Worker to Manager.
@@ -35,8 +42,9 @@ type NodeMetricsUpdateRequest struct {
 
 // DeployRequest is the request payload for deploying a new task via the Manager API.
 type DeployRequest struct {
-	Name  string `json:"name"`
-	Image string `json:"image"`
+	Name  string   `json:"name"`
+	Image string   `json:"image"`
+	Args  []string `json:"args,omitempty"`
 }
 
 // WorkerInfo represents a Worker's information for API responses.
