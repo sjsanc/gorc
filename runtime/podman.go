@@ -54,7 +54,7 @@ func getPodmanSocketPath() string {
 	return fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", uid)
 }
 
-func (r *podmanRuntime) Start(imageName string, taskID string, args []string) (string, error) {
+func (r *podmanRuntime) Start(imageName string, replicaID string, args []string) (string, error) {
 	// Pull the image
 	_, err := images.Pull(r.conn, imageName, &images.PullOptions{})
 	if err != nil {
@@ -63,9 +63,9 @@ func (r *podmanRuntime) Start(imageName string, taskID string, args []string) (s
 
 	// Create container spec
 	s := specgen.NewSpecGenerator(imageName, false)
-	s.Name = fmt.Sprintf("gorc-task-%s", taskID)
+	s.Name = fmt.Sprintf("gorc-replica-%s", replicaID)
 	s.Labels = map[string]string{
-		"gorc.task.id": taskID,
+		"gorc.replica.id": replicaID,
 	}
 
 	// Set command args if provided

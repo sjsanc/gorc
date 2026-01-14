@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,9 +15,10 @@ import (
 	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
+	"github.com/sjsanc/gorc/replica"
 	"github.com/sjsanc/gorc/runtime"
+	"github.com/sjsanc/gorc/service"
 	"github.com/sjsanc/gorc/storage"
-	"github.com/sjsanc/gorc/task"
 	"go.uber.org/zap"
 )
 
@@ -41,14 +43,18 @@ type Manager struct {
 	nodes storage.Store[node.Node]
 	// `workers` is a store of all registered workers, keyed by `id`.
 	workers storage.Store[ManagedWorker]
-	// `tasks` is a store of all tasks, keyed by task `id`.
-	tasks storage.Store[task.Task]
+	// `replicas` is a store of all replicas, keyed by replica `id`.
+	replicas storage.Store[replica.Replica]
+	// `services` is a store of all services, keyed by service `id`.
+	services storage.Store[service.Service]
 	// `metricsCollector` collects system metrics for this manager node.
 	metricsCollector metrics.Collector
 	// `ctx` is the context for the Manager and its background goroutines.
 	ctx context.Context
 	// `cancel` cancels the Manager context.
 	cancel context.CancelFunc
+	// `wg` waits for all background goroutines to complete.
+	wg sync.WaitGroup
 }
 
 func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType storage.StorageType, runtimeType runtime.RuntimeType) (*Manager, error) {
@@ -71,9 +77,14 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 		return nil, fmt.Errorf("error creating workers store: %v", err)
 	}
 
-	tasksStore, err := storage.NewStore[task.Task](storageType)
+	replicasStore, err := storage.NewStore[replica.Replica](storageType)
 	if err != nil {
-		return nil, fmt.Errorf("error creating tasks store: %v", err)
+		return nil, fmt.Errorf("error creating replicas store: %v", err)
+	}
+
+	servicesStore, err := storage.NewStore[service.Service](storageType)
+	if err != nil {
+		return nil, fmt.Errorf("error creating services store: %v", err)
 	}
 
 	collector, err := metrics.NewSystemCollector()
@@ -89,7 +100,8 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 		node:             n,
 		nodes:            nodesStore,
 		workers:          workersStore,
-		tasks:            tasksStore,
+		replicas:         replicasStore,
+		services:         servicesStore,
 		metricsCollector: collector,
 		ctx:              ctx,
 		cancel:           cancel,
@@ -119,6 +131,9 @@ func (m *Manager) Run() error {
 	// Start collecting metrics for this manager node
 	go m.collectAndStoreMetrics()
 
+	// Start reconciliation loop
+	m.startReconciliationLoop()
+
 	if err := m.server.start(); err != nil {
 		return fmt.Errorf("error starting server: %v", err)
 	}
@@ -131,6 +146,7 @@ func (m *Manager) Run() error {
 // Stop gracefully shuts down the Manager and all background goroutines.
 func (m *Manager) Stop() error {
 	m.cancel()
+	m.wg.Wait()
 	return m.server.stop()
 }
 
@@ -209,88 +225,88 @@ func (m *Manager) listWorkers() ([]*ManagedWorker, error) {
 	return workers, nil
 }
 
-func (m *Manager) createTask(name, image string, args []string) (*task.Task, error) {
-	t := task.NewTask(name, image, args)
-	err := m.tasks.Put(t.ID.String(), t)
+func (m *Manager) createReplica(name, image string, args []string) (*replica.Replica, error) {
+	r := replica.NewReplica(name, image, args)
+	err := m.replicas.Put(r.ID.String(), r)
 	if err != nil {
-		return nil, fmt.Errorf("error creating task: %v", err)
+		return nil, fmt.Errorf("error creating replica: %v", err)
 	}
-	m.logger.Infof("Task created: %s (%s)", t.Name, t.ID.String())
-	return t, nil
+	m.logger.Infof("Replica created: %s (%s)", r.Name, r.ID.String())
+	return r, nil
 }
 
-func (m *Manager) getTask(id uuid.UUID) (*task.Task, error) {
-	t, err := m.tasks.Get(id.String())
+func (m *Manager) getReplica(id uuid.UUID) (*replica.Replica, error) {
+	r, err := m.replicas.Get(id.String())
 	if err != nil {
-		return nil, fmt.Errorf("error getting task: %v", err)
+		return nil, fmt.Errorf("error getting replica: %v", err)
 	}
-	if t == nil {
-		return nil, fmt.Errorf("task not found: %s", id.String())
+	if r == nil {
+		return nil, fmt.Errorf("replica not found: %s", id.String())
 	}
-	return t, nil
+	return r, nil
 }
 
-func (m *Manager) updateTaskState(id uuid.UUID, state task.TaskState) error {
-	t, err := m.getTask(id)
+func (m *Manager) updateReplicaState(id uuid.UUID, state replica.ReplicaState) error {
+	r, err := m.getReplica(id)
 	if err != nil {
 		return err
 	}
-	t.SetState(state)
-	err = m.tasks.Put(id.String(), t)
+	r.SetState(state)
+	err = m.replicas.Put(id.String(), r)
 	if err != nil {
-		return fmt.Errorf("error updating task state: %v", err)
+		return fmt.Errorf("error updating replica state: %v", err)
 	}
-	m.logger.Infof("Task state updated: %s -> %v", t.Name, state)
+	m.logger.Infof("Replica state updated: %s -> %v", r.Name, state)
 	return nil
 }
 
-func (m *Manager) updateTaskStatus(taskIDStr string, req api.TaskStatusUpdateRequest) error {
-	id, err := uuid.Parse(taskIDStr)
+func (m *Manager) updateReplicaStatus(replicaIDStr string, req api.ReplicaStatusUpdateRequest) error {
+	id, err := uuid.Parse(replicaIDStr)
 	if err != nil {
-		return fmt.Errorf("invalid task ID: %v", err)
+		return fmt.Errorf("invalid replica ID: %v", err)
 	}
 
-	t, err := m.getTask(id)
+	r, err := m.getReplica(id)
 	if err != nil {
 		return err
 	}
 
-	// Update task state based on request
+	// Update replica state based on request
 	switch req.State {
 	case "running":
-		t.SetState(task.TaskRunning)
+		r.SetState(replica.ReplicaRunning)
 	case "completed":
-		t.MarkCompleted()
+		r.MarkCompleted()
 	case "failed":
-		t.SetError(req.Error)
+		r.SetError(req.Error)
 	default:
-		return fmt.Errorf("invalid task state: %s", req.State)
+		return fmt.Errorf("invalid replica state: %s", req.State)
 	}
 
 	// Update container ID if provided
 	if req.ContainerID != "" {
-		t.SetContainerID(req.ContainerID)
+		r.SetContainerID(req.ContainerID)
 	}
 
-	// Save updated task
-	err = m.tasks.Put(id.String(), t)
+	// Save updated replica
+	err = m.replicas.Put(id.String(), r)
 	if err != nil {
-		return fmt.Errorf("error updating task: %v", err)
+		return fmt.Errorf("error updating replica: %v", err)
 	}
 
-	m.logger.Infof("Task status updated: %s -> %s", t.Name, req.State)
+	m.logger.Infof("Replica status updated: %s -> %s", r.Name, req.State)
 	return nil
 }
 
-func (m *Manager) listTasks() ([]*task.Task, error) {
-	tasks, err := m.tasks.List()
+func (m *Manager) listReplicas() ([]*replica.Replica, error) {
+	replicas, err := m.replicas.List()
 	if err != nil {
-		return nil, fmt.Errorf("error listing tasks: %v", err)
+		return nil, fmt.Errorf("error listing replicas: %v", err)
 	}
-	return tasks, nil
+	return replicas, nil
 }
 
-func (m *Manager) scheduleTask(t *task.Task) error {
+func (m *Manager) scheduleReplica(r *replica.Replica) error {
 	// Get list of available workers
 	workers, err := m.listWorkers()
 	if err != nil {
@@ -303,20 +319,20 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 
 	// Simple scheduling: pick the first worker (MVP strategy)
 	worker := workers[0]
-	t.SetWorkerID(worker.ID)
+	r.SetWorkerID(worker.ID)
 
-	// Update task in store with assigned worker
-	err = m.tasks.Put(t.ID.String(), t)
+	// Update replica in store with assigned worker
+	err = m.replicas.Put(r.ID.String(), r)
 	if err != nil {
-		return fmt.Errorf("error updating task with worker assignment: %v", err)
+		return fmt.Errorf("error updating replica with worker assignment: %v", err)
 	}
 
 	// Create deploy request
-	deployReq := api.DeployTaskRequest{
-		TaskID: t.ID.String(),
-		Name:   t.Name,
-		Image:  t.Image,
-		Args:   t.Args,
+	deployReq := api.DeployReplicaRequest{
+		ReplicaID: r.ID.String(),
+		Name:      r.Name,
+		Image:     r.Image,
+		Cmd:       r.Cmd,
 	}
 
 	jsonData, err := json.Marshal(deployReq)
@@ -324,51 +340,51 @@ func (m *Manager) scheduleTask(t *task.Task) error {
 		return fmt.Errorf("error marshaling deploy request: %v", err)
 	}
 
-	// Send task to worker
-	workerEndpoint := fmt.Sprintf("http://%s:%d/tasks", worker.Address, worker.Port)
+	// Send replica to worker
+	workerEndpoint := fmt.Sprintf("http://%s:%d/replicas", worker.Address, worker.Port)
 	resp, err := http.Post(workerEndpoint, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return fmt.Errorf("error sending task to worker: %v", err)
+		return fmt.Errorf("error sending replica to worker: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("worker rejected task, status: %d", resp.StatusCode)
+		return fmt.Errorf("worker rejected replica, status: %d", resp.StatusCode)
 	}
 
-	// Update task state to Running
-	t.SetState(task.TaskRunning)
-	err = m.tasks.Put(t.ID.String(), t)
+	// Update replica state to Running
+	r.SetState(replica.ReplicaRunning)
+	err = m.replicas.Put(r.ID.String(), r)
 	if err != nil {
-		return fmt.Errorf("error updating task state: %v", err)
+		return fmt.Errorf("error updating replica state: %v", err)
 	}
 
-	m.logger.Infof("Task %s scheduled to worker %s", t.Name, worker.Name)
+	m.logger.Infof("Replica %s scheduled to worker %s", r.Name, worker.Name)
 	return nil
 }
 
-// stopTask sends a stop request to the worker running the specified task.
-func (m *Manager) stopTask(taskID uuid.UUID) error {
-	t, err := m.getTask(taskID)
+// stopReplica sends a stop request to the worker running the specified replica.
+func (m *Manager) stopReplica(replicaID uuid.UUID) error {
+	r, err := m.getReplica(replicaID)
 	if err != nil {
 		return err
 	}
 
-	if t.State != task.TaskRunning {
-		return fmt.Errorf("task not running (current state: %v)", t.State)
+	if r.State != replica.ReplicaRunning {
+		return fmt.Errorf("replica not running (current state: %v)", r.State)
 	}
 
-	worker, err := m.workers.Get(t.WorkerID.String())
+	worker, err := m.workers.Get(r.WorkerID.String())
 	if err != nil {
 		return fmt.Errorf("error getting worker: %v", err)
 	}
 	if worker == nil {
-		return fmt.Errorf("worker not found for task")
+		return fmt.Errorf("worker not found for replica")
 	}
 
-	stopReq := api.StopTaskRequest{
-		TaskID:      taskID.String(),
-		ContainerID: t.GetContainerID(),
+	stopReq := api.StopReplicaRequest{
+		ReplicaID:   replicaID.String(),
+		ContainerID: r.GetContainerID(),
 	}
 
 	jsonData, err := json.Marshal(stopReq)
@@ -376,7 +392,7 @@ func (m *Manager) stopTask(taskID uuid.UUID) error {
 		return fmt.Errorf("error marshaling stop request: %v", err)
 	}
 
-	workerEndpoint := fmt.Sprintf("http://%s:%d/tasks/%s/stop", worker.Address, worker.Port, taskID.String())
+	workerEndpoint := fmt.Sprintf("http://%s:%d/replicas/%s/stop", worker.Address, worker.Port, replicaID.String())
 	resp, err := http.Post(workerEndpoint, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to contact worker: %v", err)
@@ -387,7 +403,7 @@ func (m *Manager) stopTask(taskID uuid.UUID) error {
 		return fmt.Errorf("worker rejected stop request: %d", resp.StatusCode)
 	}
 
-	m.logger.Infof("Stop request sent to worker for task %s", t.Name)
+	m.logger.Infof("Stop request sent to worker for replica %s", r.Name)
 	return nil
 }
 
@@ -488,5 +504,116 @@ func (m *Manager) updateNodeMetrics(hostname string, metrics *metrics.Metrics) e
 		return fmt.Errorf("error updating node metrics: %v", err)
 	}
 
+	return nil
+}
+
+// Service management methods
+
+func (m *Manager) createOrUpdateService(svc *service.Service) (*service.Service, error) {
+	// Check if service already exists by name
+	existing, err := m.getServiceByName(svc.Name)
+	if err != nil && err.Error() != "service not found" {
+		return nil, err
+	}
+
+	if existing != nil {
+		// Update existing service (preserve ID, update timestamp)
+		svc.ID = existing.ID
+		svc.CreatedAt = existing.CreatedAt
+		svc.UpdatedAt = time.Now()
+	}
+
+	err = m.services.Put(svc.ID.String(), svc)
+	if err != nil {
+		return nil, fmt.Errorf("error storing service: %v", err)
+	}
+
+	verb := "created"
+	if existing != nil {
+		verb = "updated"
+	}
+	m.logger.Infof("Service %s: %s", verb, svc.Name)
+	return svc, nil
+}
+
+func (m *Manager) getServiceByName(name string) (*service.Service, error) {
+	services, err := m.services.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, svc := range services {
+		if svc.Name == name {
+			return svc, nil
+		}
+	}
+	return nil, fmt.Errorf("service not found")
+}
+
+func (m *Manager) getService(id uuid.UUID) (*service.Service, error) {
+	return m.services.Get(id.String())
+}
+
+func (m *Manager) listServices() ([]*service.Service, error) {
+	return m.services.List()
+}
+
+func (m *Manager) deleteService(id uuid.UUID) error {
+	return m.services.Delete(id.String())
+}
+
+func (m *Manager) getReplicasForService(serviceID uuid.UUID) ([]*replica.Replica, error) {
+	allReplicas, err := m.listReplicas()
+	if err != nil {
+		return nil, err
+	}
+
+	var serviceReplicas []*replica.Replica
+	for _, r := range allReplicas {
+		if r.ServiceID == serviceID {
+			serviceReplicas = append(serviceReplicas, r)
+		}
+	}
+	return serviceReplicas, nil
+}
+
+func (m *Manager) deleteReplica(id uuid.UUID) error {
+	return m.replicas.Delete(id.String())
+}
+
+func (m *Manager) deleteReplicasForService(serviceID uuid.UUID) error {
+	replicas, err := m.getReplicasForService(serviceID)
+	if err != nil {
+		return err
+	}
+
+	for _, r := range replicas {
+		if r.State == replica.ReplicaRunning {
+			if err := m.stopReplica(r.ID); err != nil {
+				m.logger.Warnf("failed to stop replica %s during delete: %v", r.Name, err)
+			}
+		}
+		if err := m.deleteReplica(r.ID); err != nil {
+			m.logger.Warnf("failed to delete replica %s: %v", r.Name, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) deleteServicesForApp(appName string) error {
+	allServices, err := m.listServices()
+	if err != nil {
+		return err
+	}
+
+	for _, svc := range allServices {
+		if svc.AppName == appName {
+			if err := m.deleteReplicasForService(svc.ID); err != nil {
+				m.logger.Warnf("failed to delete replicas for service %s: %v", svc.Name, err)
+			}
+			if err := m.deleteService(svc.ID); err != nil {
+				m.logger.Warnf("failed to delete service %s: %v", svc.Name, err)
+			}
+		}
+	}
 	return nil
 }

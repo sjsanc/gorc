@@ -13,22 +13,22 @@ type RegisterWorkerRequest struct {
 	WorkerPort    int    `json:"worker_port"`
 }
 
-// DeployTaskRequest is the request payload for deploying a task to a Worker.
-type DeployTaskRequest struct {
-	TaskID string   `json:"task_id"`
-	Name   string   `json:"name"`
-	Image  string   `json:"image"`
-	Args   []string `json:"args,omitempty"`
+// DeployReplicaRequest is the request payload for deploying a replica to a Worker.
+type DeployReplicaRequest struct {
+	ReplicaID string   `json:"replica_id"`
+	Name      string   `json:"name"`
+	Image     string   `json:"image"`
+	Cmd       []string `json:"cmd,omitempty"`
 }
 
-// StopTaskRequest is the request payload for stopping a task on a Worker.
-type StopTaskRequest struct {
-	TaskID      string `json:"task_id"`
+// StopReplicaRequest is the request payload for stopping a replica on a Worker.
+type StopReplicaRequest struct {
+	ReplicaID   string `json:"replica_id"`
 	ContainerID string `json:"container_id"`
 }
 
-// TaskStatusUpdateRequest is the request payload for updating task status from Worker to Manager.
-type TaskStatusUpdateRequest struct {
+// ReplicaStatusUpdateRequest is the request payload for updating replica status from Worker to Manager.
+type ReplicaStatusUpdateRequest struct {
 	State       string `json:"state"`                 // "running", "completed", "failed"
 	ContainerID string `json:"containerId,omitempty"` // Docker container ID
 	Error       string `json:"error,omitempty"`       // Error message if failed
@@ -40,11 +40,11 @@ type NodeMetricsUpdateRequest struct {
 	Metrics  *metrics.Metrics `json:"metrics"`
 }
 
-// DeployRequest is the request payload for deploying a new task via the Manager API.
+// DeployRequest is the request payload for deploying a new replica via the Manager API.
 type DeployRequest struct {
 	Name  string   `json:"name"`
 	Image string   `json:"image"`
-	Args  []string `json:"args,omitempty"`
+	Cmd   []string `json:"cmd,omitempty"`
 }
 
 // WorkerInfo represents a Worker's information for API responses.
@@ -62,4 +62,29 @@ type NodeInfo struct {
 	Address     string `json:"address"`
 	ManagerPort int    `json:"manager_port"`
 	WorkerPort  int    `json:"worker_port"`
+}
+
+// CreateServiceRequest is the request payload for creating or updating a service.
+type CreateServiceRequest struct {
+	Name          string   `json:"name"`
+	Image         string   `json:"image"`
+	Replicas      int      `json:"replicas"`
+	Cmd           []string `json:"cmd,omitempty"`
+	RestartPolicy string   `json:"restart_policy"`
+	AppName       string   `json:"app_name,omitempty"`
+}
+
+// UpdateServiceRequest is the request payload for updating an existing service.
+type UpdateServiceRequest struct {
+	Replicas int `json:"replicas"`
+}
+
+// ServiceInfo represents a service for API responses.
+type ServiceInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Image         string `json:"image"`
+	Replicas      int    `json:"replicas"`
+	RestartPolicy string `json:"restart_policy"`
+	AppName       string `json:"app_name,omitempty"`
 }

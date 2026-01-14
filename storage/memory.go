@@ -3,7 +3,7 @@ package storage
 import (
 	"sync"
 
-	"github.com/sjsanc/gorc/task"
+	"github.com/sjsanc/gorc/replica"
 )
 
 type memoryStore[T any] struct {
@@ -21,8 +21,8 @@ func (s *memoryStore[T]) Put(key string, value *T) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Defensive copy for Task type to prevent external modifications
-	if t, ok := any(value).(*task.Task); ok {
+	// Defensive copy for replica type to prevent external modifications
+	if t, ok := any(value).(*replica.Replica); ok {
 		cloned := t.Clone()
 		s.db[key] = any(cloned).(*T)
 	} else {
@@ -41,8 +41,8 @@ func (s *memoryStore[T]) Get(key string) (*T, error) {
 		return nil, nil
 	}
 
-	// Defensive copy for Task type to prevent aliasing
-	if t, ok := any(value).(*task.Task); ok {
+	// Defensive copy for replica type to prevent aliasing
+	if t, ok := any(value).(*replica.Replica); ok {
 		cloned := t.Clone()
 		return any(cloned).(*T), nil
 	}

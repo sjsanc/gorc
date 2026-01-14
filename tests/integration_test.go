@@ -114,8 +114,8 @@ func TestNodeRegistry(t *testing.T) {
 	t.Logf("✓ Nodes registered in cluster. Total nodes: %d", len(nodes))
 }
 
-// Feature 4: Task Deployment
-func TestTaskDeployment(t *testing.T) {
+// Feature 4: replica Deployment
+func TestreplicaDeployment(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
@@ -133,13 +133,13 @@ func TestTaskDeployment(t *testing.T) {
 
 	deployReq := api.DeployRequest{
 		Image: "alpine:latest",
-		Name:  "test-task",
+		Name:  "test-replica",
 	}
 
 	body, _ := json.Marshal(deployReq)
-	resp, err := http.Post("http://0.0.0.0:5555/tasks", "application/json", bytes.NewReader(body))
+	resp, err := http.Post("http://0.0.0.0:5555/replicas", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("Failed to deploy task: %v", err)
+		t.Fatalf("Failed to deploy replica: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -147,11 +147,11 @@ func TestTaskDeployment(t *testing.T) {
 		t.Fatalf("Expected status 200/201, got %d", resp.StatusCode)
 	}
 
-	t.Log("✓ Task deployed successfully")
+	t.Log("✓ replica deployed successfully")
 }
 
-// Feature 5: Task Event Processing
-func TestTaskEventProcessing(t *testing.T) {
+// Feature 5: replica Event Processing
+func TestreplicaEventProcessing(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
@@ -169,26 +169,26 @@ func TestTaskEventProcessing(t *testing.T) {
 
 	deployReq := api.DeployRequest{
 		Image: "alpine:latest",
-		Name:  "test-event-task",
+		Name:  "test-event-replica",
 	}
 
 	body, _ := json.Marshal(deployReq)
-	resp, err := http.Post("http://0.0.0.0:5555/tasks", "application/json", bytes.NewReader(body))
+	resp, err := http.Post("http://0.0.0.0:5555/replicas", "application/json", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("Failed to deploy task: %v", err)
+		t.Fatalf("Failed to deploy replica: %v", err)
 	}
 	defer resp.Body.Close()
 
 	time.Sleep(2 * time.Second)
 
-	resp, err = http.Get("http://0.0.0.0:5555/tasks")
+	resp, err = http.Get("http://0.0.0.0:5555/replicas")
 	if err != nil {
-		t.Fatalf("Failed to fetch tasks: %v", err)
+		t.Fatalf("Failed to fetch replicas: %v", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	t.Logf("✓ Worker received and processed task event. Tasks: %s", string(bodyBytes))
+	t.Logf("✓ Worker received and processed replica event. replicas: %s", string(bodyBytes))
 }
 
 // Feature 6: Graceful Shutdown
@@ -267,11 +267,11 @@ func TestDeployWithCustomArgs(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	// Deploy task with custom args
+	// Deploy replica with custom args
 	deployReq := api.DeployRequest{
 		Name:  "test-custom-args",
 		Image: "alpine:latest",
-		Args:  []string{"sh", "-c", "sleep 10"},
+		Cmd:   []string{"sh", "-c", "sleep 10"},
 	}
 
 	jsonData, err := json.Marshal(deployReq)
@@ -279,9 +279,9 @@ func TestDeployWithCustomArgs(t *testing.T) {
 		t.Fatalf("Failed to marshal request: %v", err)
 	}
 
-	resp, err := http.Post("http://0.0.0.0:5520/tasks", "application/json", bytes.NewBuffer(jsonData))
+	resp, err := http.Post("http://0.0.0.0:5520/replicas", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		t.Fatalf("Failed to deploy task with args: %v", err)
+		t.Fatalf("Failed to deploy replica with args: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -296,66 +296,66 @@ func TestDeployWithCustomArgs(t *testing.T) {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	taskID := result["task_id"]
-	if taskID == "" {
-		t.Fatalf("Task ID not returned in response")
+	replicaID := result["replica_id"]
+	if replicaID == "" {
+		t.Fatalf("Replica ID not returned in response")
 	}
 
-	// Wait for task to be processed by worker
+	// Wait for replica to be processed by worker
 	time.Sleep(2 * time.Second)
 
-	// Verify task was created with correct args
-	tasksResp, err := http.Get("http://0.0.0.0:5520/tasks")
+	// Verify replica was created with correct args
+	replicasResp, err := http.Get("http://0.0.0.0:5520/replicas")
 	if err != nil {
-		t.Fatalf("Failed to get tasks: %v", err)
+		t.Fatalf("Failed to get replicas: %v", err)
 	}
-	defer tasksResp.Body.Close()
+	defer replicasResp.Body.Close()
 
-	var tasks []interface{}
-	err = json.NewDecoder(tasksResp.Body).Decode(&tasks)
+	var replicas []interface{}
+	err = json.NewDecoder(replicasResp.Body).Decode(&replicas)
 	if err != nil {
-		t.Fatalf("Failed to parse tasks response: %v", err)
+		t.Fatalf("Failed to parse replicas response: %v", err)
 	}
 
 	found := false
-	for _, taskInterface := range tasks {
-		task, ok := taskInterface.(map[string]interface{})
+	for _, replicaInterface := range replicas {
+		replica, ok := replicaInterface.(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		taskName, ok := task["Name"].(string)
-		if !ok || taskName != "test-custom-args" {
+		replicaName, ok := replica["Name"].(string)
+		if !ok || replicaName != "test-custom-args" {
 			continue
 		}
 
 		found = true
-		args, ok := task["Args"].([]interface{})
+		cmd, ok := replica["Cmd"].([]interface{})
 		if !ok {
-			// Args might be nil or empty
-			if task["Args"] == nil {
-				t.Errorf("Args field is nil in task response")
+			// Cmd might be nil or empty
+			if replica["Cmd"] == nil {
+				t.Errorf("Cmd field is nil in replica response")
 			} else {
-				t.Errorf("Args field has unexpected type in task response: %T", task["Args"])
+				t.Errorf("Cmd field has unexpected type in replica response: %T", replica["Cmd"])
 			}
 			break
 		}
 
-		// Verify args match what we sent
-		expectedArgs := []string{"sh", "-c", "sleep 10"}
-		if len(args) != len(expectedArgs) {
-			t.Errorf("Expected %d args, got %d", len(expectedArgs), len(args))
+		// Verify cmd match what we sent
+		expectedCmd := []string{"sh", "-c", "sleep 10"}
+		if len(cmd) != len(expectedCmd) {
+			t.Errorf("Expected %d cmd items, got %d", len(expectedCmd), len(cmd))
 			break
 		}
 
-		for i, arg := range args {
-			argStr, ok := arg.(string)
+		for i, cmdItem := range cmd {
+			cmdStr, ok := cmdItem.(string)
 			if !ok {
-				t.Errorf("Arg %d has unexpected type: %T", i, arg)
+				t.Errorf("Cmd item %d has unexpected type: %T", i, cmdItem)
 				continue
 			}
-			if argStr != expectedArgs[i] {
-				t.Errorf("Arg %d: expected %s, got %s", i, expectedArgs[i], argStr)
+			if cmdStr != expectedCmd[i] {
+				t.Errorf("Cmd item %d: expected %s, got %s", i, expectedCmd[i], cmdStr)
 			}
 		}
 
@@ -363,8 +363,8 @@ func TestDeployWithCustomArgs(t *testing.T) {
 	}
 
 	if !found {
-		t.Fatalf("Task with custom args not found in task list. Tasks: %v", tasks)
+		t.Fatalf("Replica with custom args not found in replica list. replicas: %v", replicas)
 	}
 
-	t.Log("✓ Task deployed successfully with custom arguments")
+	t.Log("✓ replica deployed successfully with custom arguments")
 }

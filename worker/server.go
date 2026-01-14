@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
-	"github.com/sjsanc/gorc/task"
+	"github.com/sjsanc/gorc/replica"
 )
 
 type server struct {
@@ -68,60 +68,86 @@ func (s *server) stop() error {
 }
 
 func (s *server) initRouter() {
-	s.router.Route("/tasks", func(r chi.Router) {
-		r.Post("/", s.handleDeployTask)
-		r.Post("/{taskID}/stop", s.handleStopTask)
+	s.router.Route("/replicas", func(r chi.Router) {
+		r.Post("/", s.handleDeployReplica)
+		r.Post("/{replicaID}/stop", s.handleStopReplica)
 	})
 }
 
-func (s *server) handleDeployTask(w http.ResponseWriter, r *http.Request) {
-	var req api.DeployTaskRequest
+func (s *server) handleDeployReplica(w http.ResponseWriter, r *http.Request) {
+	var req api.DeployReplicaRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	taskID, err := uuid.Parse(req.TaskID)
+	replicaID, err := uuid.Parse(req.ReplicaID)
 	if err != nil {
-		http.Error(w, "invalid task ID", http.StatusBadRequest)
+		http.Error(w, "invalid replica ID", http.StatusBadRequest)
 		return
 	}
 
-	t := &task.Task{
-		ID:    taskID,
+	rep := &replica.Replica{
+		ID:    replicaID,
 		Name:  req.Name,
 		Image: req.Image,
-		Args:  req.Args,
-		State: task.TaskPending,
+		Cmd:   req.Cmd,
+		State: replica.ReplicaPending,
 	}
 
-	event := task.Event{Task: t, Action: task.DeployEvent}
+	event := replica.Event{Replica: rep, Action: replica.DeployEvent}
 	s.worker.events.Enqueue(event)
 
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
 }
 
-func (s *server) handleStopTask(w http.ResponseWriter, r *http.Request) {
-	taskIDStr := chi.URLParam(r, "taskID")
-	taskID, err := uuid.Parse(taskIDStr)
+func (s *server) handleStopReplica(w http.ResponseWriter, r *http.Request) {
+	replicaIDStr := chi.URLParam(r, "replicaID")
+	replicaID, err := uuid.Parse(replicaIDStr)
 	if err != nil {
-		http.Error(w, "invalid task ID", http.StatusBadRequest)
+		http.Error(w, "invalid replica ID", http.StatusBadRequest)
 		return
 	}
 
-	var req api.StopTaskRequest
+	var req api.StopReplicaRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	t := &task.Task{
-		ID: taskID,
+	rep := &replica.Replica{
+		ID: replicaID,
 	}
-	t.SetContainerID(req.ContainerID)
+	rep.SetContainerID(req.ContainerID)
 
-	event := task.Event{Task: t, Action: task.StopEvent}
+	event := replica.Event{Replica: rep, Action: replica.StopEvent}
+	s.worker.events.Enqueue(event)
+
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+}
+
+func (s *server) handleStopReplicaLegacy(w http.ResponseWriter, r *http.Request) {
+	replicaIDStr := chi.URLParam(r, "replicaID")
+	replicaID, err := uuid.Parse(replicaIDStr)
+	if err != nil {
+		http.Error(w, "invalid replica ID", http.StatusBadRequest)
+		return
+	}
+
+	var req api.StopReplicaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	rep := &replica.Replica{
+		ID: replicaID,
+	}
+	rep.SetContainerID(req.ContainerID)
+
+	event := replica.Event{Replica: rep, Action: replica.StopEvent}
 	s.worker.events.Enqueue(event)
 
 	w.WriteHeader(http.StatusAccepted)

@@ -1,0 +1,9 @@
+[app]
+name = "alpine"
+
+[[app.services]]
+name = "alpine"
+image = "alpine:latest"
+cmd = ["sh", "-c", "sleep infinity"]
+replicas = 1
+restart_policy = "never"

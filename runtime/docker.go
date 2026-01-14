@@ -28,7 +28,7 @@ func newDockerRuntime() (*dockerRuntime, error) {
 	}, nil
 }
 
-func (r *dockerRuntime) Start(imageName string, taskID string, args []string) (string, error) {
+func (r *dockerRuntime) Start(imageName string, replicaID string, args []string) (string, error) {
 	// Pull the image
 	reader, err := r.dockerClient.ImagePull(r.ctx, imageName, image.PullOptions{})
 	if err != nil {
@@ -38,11 +38,11 @@ func (r *dockerRuntime) Start(imageName string, taskID string, args []string) (s
 	// Read the pull output to ensure it completes
 	io.Copy(io.Discard, reader)
 
-	// Create container with task ID as name
+	// Create container with replica ID as name
 	containerConfig := &container.Config{
 		Image: imageName,
 		Labels: map[string]string{
-			"gorc.task.id": taskID,
+			"gorc.replica.id": replicaID,
 		},
 	}
 
@@ -51,7 +51,7 @@ func (r *dockerRuntime) Start(imageName string, taskID string, args []string) (s
 		containerConfig.Cmd = args
 	}
 
-	resp, err := r.dockerClient.ContainerCreate(r.ctx, containerConfig, nil, nil, nil, fmt.Sprintf("gorc-task-%s", taskID))
+	resp, err := r.dockerClient.ContainerCreate(r.ctx, containerConfig, nil, nil, nil, fmt.Sprintf("gorc-replica-%s", replicaID))
 	if err != nil {
 		return "", fmt.Errorf("failed to create container: %v", err)
 	}

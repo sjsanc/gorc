@@ -4,16 +4,16 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sjsanc/gorc/replica"
 	"github.com/sjsanc/gorc/storage"
-	"github.com/sjsanc/gorc/task"
 )
 
-// TestConcurrentTaskModifications verifies that concurrent Task modifications are safe.
-func TestConcurrentTaskModifications(t *testing.T) {
-	tk := task.NewTask("test-concurrent", "alpine:latest", nil)
+// TestConcurrentReplicaModifications verifies that concurrent Replica modifications are safe.
+func TestConcurrentreplicaModifications(t *testing.T) {
+	tk := replica.NewReplica("test-concurrent", "alpine:latest", nil)
 	var wg sync.WaitGroup
 
-	// Spawn 20 goroutines modifying task concurrently
+	// Spawn 20 goroutines modifying replica concurrently
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -22,36 +22,36 @@ func TestConcurrentTaskModifications(t *testing.T) {
 				tk.MarkRunning("container-123")
 				tk.MarkCompleted()
 			} else {
-				tk.SetState(task.TaskRunning)
+				tk.SetState(replica.ReplicaRunning)
 				tk.SetError("test error")
 			}
 		}(i)
 	}
 	wg.Wait()
 
-	// Verify task has valid state after concurrent modifications
+	// Verify replica has valid state after concurrent modifications
 	if tk.GetContainerID() != "container-123" && tk.GetContainerID() != "" {
 		t.Errorf("Unexpected container ID: %s", tk.GetContainerID())
 	}
 }
 
-// TestStorageTaskIsolation verifies that modifications to retrieved tasks don't affect stored copies.
-func TestStorageTaskIsolation(t *testing.T) {
-	store, _ := storage.NewStore[task.Task](storage.StorageInMemory)
-	originalTask := task.NewTask("test-isolation", "alpine:latest", nil)
-	originalTask.MarkRunning("original-container")
+// TestStorageReplicaIsolation verifies that modifications to retrieved replicas don't affect stored copies.
+func TestStoragereplicaIsolation(t *testing.T) {
+	store, _ := storage.NewStore[replica.Replica](storage.StorageInMemory)
+	originalreplica := replica.NewReplica("test-isolation", "alpine:latest", nil)
+	originalreplica.MarkRunning("original-container")
 
-	// Put task in storage
-	store.Put("task1", originalTask)
+	// Put replica in storage
+	store.Put("replica1", originalreplica)
 
-	// Retrieve task and modify it
-	retrieved1, _ := store.Get("task1")
+	// Retrieve replica and modify it
+	retrieved1, _ := store.Get("replica1")
 	retrieved1.MarkRunning("modified-container")
 
-	// Retrieve task again and verify original container ID is preserved
-	retrieved2, _ := store.Get("task1")
+	// Retrieve replica again and verify original container ID is preserved
+	retrieved2, _ := store.Get("replica1")
 	if retrieved2.GetContainerID() == "modified-container" {
-		t.Error("Storage did not isolate tasks - modifications leaked between retrievals")
+		t.Error("Storage did not isolate replicas - modifications leaked between retrievals")
 	}
 
 	if retrieved2.GetContainerID() != "original-container" {
@@ -59,9 +59,9 @@ func TestStorageTaskIsolation(t *testing.T) {
 	}
 }
 
-// TestConcurrentStorageAccess verifies that concurrent Get/Put operations are safe.
+// TestConcurrentStorageAccess verifies that concurrent Get/Put operations on replicas are safe.
 func TestConcurrentStorageAccess(t *testing.T) {
-	store, _ := storage.NewStore[task.Task](storage.StorageInMemory)
+	store, _ := storage.NewStore[replica.Replica](storage.StorageInMemory)
 	var wg sync.WaitGroup
 
 	// Spawn goroutines doing concurrent Get/Put operations
@@ -72,9 +72,9 @@ func TestConcurrentStorageAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				tk := task.NewTask("test", "alpine:latest", nil)
-				tk.SetState(task.TaskRunning)
-				store.Put("task", tk)
+				tk := replica.NewReplica("test", "alpine:latest", nil)
+				tk.SetState(replica.ReplicaRunning)
+				store.Put("replica", tk)
 			}
 		}(i)
 
@@ -82,7 +82,7 @@ func TestConcurrentStorageAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				store.Get("task")
+				store.Get("replica")
 			}
 		}(i)
 
@@ -90,9 +90,9 @@ func TestConcurrentStorageAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				if tk, _ := store.Get("task"); tk != nil {
+				if tk, _ := store.Get("replica"); tk != nil {
 					tk.SetError("concurrent error")
-					store.Put("task", tk)
+					store.Put("replica", tk)
 				}
 			}
 		}(i)
@@ -101,15 +101,15 @@ func TestConcurrentStorageAccess(t *testing.T) {
 	wg.Wait()
 
 	// Verify final state is valid
-	finalTask, _ := store.Get("task")
-	if finalTask == nil {
-		t.Error("Final task should not be nil")
+	finalreplica, _ := store.Get("replica")
+	if finalreplica == nil {
+		t.Error("Final replica should not be nil")
 	}
 }
 
-// TestTaskSetterConsistency verifies that compound operations are atomic.
-func TestTaskSetterConsistency(t *testing.T) {
-	tk := task.NewTask("test-consistency", "alpine:latest", nil)
+// TestreplicaSetterConsistency verifies that compound operations are atomic.
+func TestreplicaSetterConsistency(t *testing.T) {
+	tk := replica.NewReplica("test-consistency", "alpine:latest", nil)
 	var wg sync.WaitGroup
 
 	// Spawn goroutines calling MarkRunning and MarkCompleted concurrently
@@ -133,7 +133,7 @@ func TestTaskSetterConsistency(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify task has valid final state
-	// Final state should be either TaskRunning or TaskCompleted (not corrupted)
+	// Verify replica has valid final state
+	// Final state should be either replicaRunning or replicaCompleted (not corrupted)
 	// Both are valid final states due to race between MarkRunning and MarkCompleted
 }

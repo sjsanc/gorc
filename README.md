@@ -2,30 +2,11 @@
 
 Gorc is a toy container orchestrator based on Tim Boring's Cube from [Build an Orchestrator in Go from Scratch](https://www.manning.com/books/build-an-orchestrator-in-go-from-scratch).
 
-## CLI
+## Commands
 
-Features so far include:
-- manager-worker design
-- docker runtime support
-- s
-- worker heartbeats
-
-Planned features:
-- podman runtime support
-- node usage monitoring
-- grpc/protobuf
-
-### Commands
+### Manager & Worker
 
 ```bash
-# Deploy a container task to the cluster
-gorc deploy --image <image> [--name <name>] [--manager <address>]
-
-# List various entities in the cluster
-gorc list nodes                         # List all registered nodes
-gorc list workers                       # List all registered workers
-gorc list tasks [--manager <address>]   # List all tasks
-
 # Start a manager process
 gorc manager [--address <addr>] [--port <port>] [--storage <type>] [--runtime <type>]
   -a, --address <addr>   Address to listen on (default: 0.0.0.0)
@@ -37,9 +18,39 @@ gorc manager [--address <addr>] [--port <port>] [--storage <type>] [--runtime <t
 gorc worker [--address <addr>] [--port <port>] [--manager <addr>] [--runtime <type>]
   -a, --address <addr>   Address to listen on (default: 0.0.0.0)
   -p, --port <port>      Port to listen on (default: auto-select 6000-7000)
-  -m, --manager <addr>   Manager address (default: 0.0.0.0:5555)
+  -m, --manager <addr>   Manager address (default: localhost:5555)
   -r, --runtime <type>   Container runtime (default: docker)
+```
 
-# Stop a running task
-gorc stop --task-id <id> [--manager <address>]
+### Application Management
+
+```bash
+# Deploy an application from a TOML config file
+gorc app deploy <config.toml> [--manager <address>]
+
+# Stop an application (scales all services to 0 replicas)
+gorc app stop <app-name> [--manager <address>]
+```
+
+### Listing Cluster State
+
+```bash
+# List all registered nodes
+gorc list nodes
+
+# List all registered workers
+gorc list workers
+
+# List all deployed services
+gorc list services [--manager <address>]
+
+# List all running replicas
+gorc list replicas [--manager <address>]
+```
+
+### Replica Control
+
+```bash
+# Stop a running replica
+gorc stop --replica-id <id> [--manager <address>]
 ```

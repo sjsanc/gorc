@@ -10,11 +10,11 @@ import (
 
 var stopCmd = &cli.Command{
 	Name:  "stop",
-	Usage: "Stop a running task",
+	Usage: "Stop a running replica",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
-			Name:     "task-id",
-			Usage:    "ID of the task to stop",
+			Name:     "replica-id",
+			Usage:    "ID of the replica to stop",
 			Required: true,
 		},
 		&cli.StringFlag{
@@ -24,10 +24,10 @@ var stopCmd = &cli.Command{
 		},
 	},
 	Action: func(c *cli.Context) error {
-		taskID := c.String("task-id")
+		replicaID := c.String("replica-id")
 		managerAddr := c.String("manager")
 
-		endpoint := fmt.Sprintf("http://%s/tasks/%s", managerAddr, taskID)
+		endpoint := fmt.Sprintf("http://%s/replicas/%s", managerAddr, replicaID)
 
 		req, err := http.NewRequest("DELETE", endpoint, nil)
 		if err != nil {
@@ -43,11 +43,11 @@ var stopCmd = &cli.Command{
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("failed to stop task (status %d): %s", resp.StatusCode, string(body))
+			return fmt.Errorf("failed to stop replica (status %d): %s", resp.StatusCode, string(body))
 		}
 
-		fmt.Printf("Task stopped successfully!\n")
-		fmt.Printf("  Task ID: %s\n", taskID)
+		fmt.Printf("replica stopped successfully!\n")
+		fmt.Printf("  replica ID: %s\n", replicaID)
 		fmt.Printf("  Status: stopping\n")
 
 		return nil

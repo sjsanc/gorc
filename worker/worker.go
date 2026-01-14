@@ -16,8 +16,8 @@ import (
 	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
+	"github.com/sjsanc/gorc/replica"
 	"github.com/sjsanc/gorc/runtime"
-	"github.com/sjsanc/gorc/task"
 	"github.com/sjsanc/gorc/utils"
 	"go.uber.org/zap"
 )
@@ -35,8 +35,8 @@ type Worker struct {
 	// `managerAddr` is the address of the Manager server.
 	managerAddr string
 	// `events` is a queue of events to be processed by the Worker.
-	events *utils.Queue[task.Event]
-	// `runtime` is the container runtime for executing tasks.
+	events *utils.Queue[replica.Event]
+	// `runtime` is the container runtime for executing replicas.
 	runtime runtime.Runtime
 	// `metricsCollector` collects system metrics for this worker node.
 	metricsCollector metrics.Collector
@@ -74,7 +74,7 @@ func NewWorker(logger *zap.SugaredLogger, addr string, port int, managerAddr str
 		name:             hn,
 		node:             n,
 		managerAddr:      managerAddr,
-		events:           utils.NewQueue[task.Event](),
+		events:           utils.NewQueue[replica.Event](),
 		runtime:          rt,
 		metricsCollector: collector,
 		ctx:              ctx,
@@ -169,52 +169,52 @@ func (w *Worker) processEvents() {
 				continue
 			}
 
-			w.logger.Infof("Processing event: %v for task %s", event.Action, event.Task.Name)
+			w.logger.Infof("Processing event: %v for replica %s", event.Action, event.Replica.Name)
 
 			switch event.Action {
-			case task.DeployEvent:
-				w.handleDeploy(event.Task)
-			case task.StopEvent:
-				w.handleStop(event.Task)
+			case replica.DeployEvent:
+				w.handleDeploy(event.Replica)
+			case replica.StopEvent:
+				w.handleStop(event.Replica)
 			}
 		}
 	}
 }
 
-// handleDeploy starts a container for the given task.
-func (w *Worker) handleDeploy(t *task.Task) {
-	w.logger.Infof("Deploying task: %s (image: %s)", t.Name, t.Image)
+// handleDeploy starts a container for the given replica.
+func (w *Worker) handleDeploy(t *replica.Replica) {
+	w.logger.Infof("Deploying replica: %s (image: %s)", t.Name, t.Image)
 
-	containerID, err := w.runtime.Start(t.Image, t.ID.String(), t.Args)
+	containerID, err := w.runtime.Start(t.Image, t.ID.String(), t.Cmd)
 	if err != nil {
-		w.logger.Errorf("Failed to start task %s: %v", t.Name, err)
+		w.logger.Errorf("Failed to start replica %s: %v", t.Name, err)
 		t.SetError(err.Error())
 		// Report failure to manager
-		w.reportTaskStatus(t.ID, "failed", "", err.Error())
+		w.reportReplicaStatus(t.ID, "failed", "", err.Error())
 		return
 	}
 
-	w.logger.Infof("Task %s started successfully (container: %s)", t.Name, containerID)
+	w.logger.Infof("Replica %s started successfully (container: %s)", t.Name, containerID)
 	t.MarkRunning(containerID)
 
 	// Report running status to manager
-	err = w.reportTaskStatus(t.ID, "running", containerID, "")
+	err = w.reportReplicaStatus(t.ID, "running", containerID, "")
 	if err != nil {
-		w.logger.Warnf("Failed to report running status for task %s: %v", t.Name, err)
+		w.logger.Warnf("Failed to report running status for replica %s: %v", t.Name, err)
 	}
 
 	// Monitor container completion in background
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		w.monitorTaskCompletion(t)
+		w.monitorReplicaCompletion(t)
 	}()
 }
 
-// monitorTaskCompletion waits for a container to finish and reports the final status.
+// monitorReplicaCompletion waits for a container to finish and reports the final status.
 // It respects context cancellation to ensure graceful shutdown.
-func (w *Worker) monitorTaskCompletion(t *task.Task) {
-	w.logger.Infof("Monitoring completion for task: %s (container: %s)", t.Name, t.GetContainerID())
+func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
+	w.logger.Infof("Monitoring completion for replica: %s (container: %s)", t.Name, t.GetContainerID())
 
 	// Create a channel to receive the exit code
 	exitCodeChan := make(chan int64, 1)
@@ -233,37 +233,37 @@ func (w *Worker) monitorTaskCompletion(t *task.Task) {
 	// Wait for either the container to finish or context cancellation
 	select {
 	case <-w.ctx.Done():
-		w.logger.Infof("Task monitoring cancelled for task: %s", t.Name)
+		w.logger.Infof("Replica monitoring cancelled for replica: %s", t.Name)
 		return
 	case err := <-errChan:
-		w.logger.Errorf("Error waiting for task %s: %v", t.Name, err)
+		w.logger.Errorf("Error waiting for replica %s: %v", t.Name, err)
 		t.SetError(err.Error())
-		w.reportTaskStatus(t.ID, "failed", t.GetContainerID(), err.Error())
+		w.reportReplicaStatus(t.ID, "failed", t.GetContainerID(), err.Error())
 		return
 	case exitCode := <-exitCodeChan:
-		// Check exit code to determine if task succeeded or failed
+		// Check exit code to determine if replica succeeded or failed
 		if exitCode == 0 {
-			w.logger.Infof("Task %s completed successfully (exit code: %d)", t.Name, exitCode)
+			w.logger.Infof("Replica %s completed successfully (exit code: %d)", t.Name, exitCode)
 			t.MarkCompleted()
-			w.reportTaskStatus(t.ID, "completed", t.GetContainerID(), "")
+			w.reportReplicaStatus(t.ID, "completed", t.GetContainerID(), "")
 		} else {
 			errMsg := fmt.Sprintf("container exited with code %d", exitCode)
-			w.logger.Errorf("Task %s failed: %s", t.Name, errMsg)
+			w.logger.Errorf("Replica %s failed: %s", t.Name, errMsg)
 			t.SetError(errMsg)
-			w.reportTaskStatus(t.ID, "failed", t.GetContainerID(), errMsg)
+			w.reportReplicaStatus(t.ID, "failed", t.GetContainerID(), errMsg)
 		}
 	}
 }
 
-// handleStop stops a running container for the given task.
-func (w *Worker) handleStop(t *task.Task) {
+// handleStop stops a running container for the given replica.
+func (w *Worker) handleStop(t *replica.Replica) {
 	containerID := t.GetContainerID()
-	w.logger.Infof("Stopping task: %s (container: %s)", t.Name, containerID)
+	w.logger.Infof("Stopping replica: %s (container: %s)", t.Name, containerID)
 
 	if containerID == "" {
-		w.logger.Warnf("Task %s has no container ID, marking completed", t.Name)
+		w.logger.Warnf("Replica %s has no container ID, marking completed", t.Name)
 		t.MarkCompleted()
-		w.reportTaskStatus(t.ID, "completed", "", "")
+		w.reportReplicaStatus(t.ID, "completed", "", "")
 		return
 	}
 
@@ -271,26 +271,26 @@ func (w *Worker) handleStop(t *task.Task) {
 	if err != nil {
 		// Check if container already gone (idempotent)
 		if isContainerNotFoundError(err) {
-			w.logger.Warnf("Container already removed for task %s", t.Name)
+			w.logger.Warnf("Container already removed for replica %s", t.Name)
 			t.MarkCompleted()
-			w.reportTaskStatus(t.ID, "completed", containerID, "")
+			w.reportReplicaStatus(t.ID, "completed", containerID, "")
 			return
 		}
 
-		w.logger.Errorf("Failed to stop task %s: %v", t.Name, err)
+		w.logger.Errorf("Failed to stop replica %s: %v", t.Name, err)
 		t.SetError(err.Error())
-		w.reportTaskStatus(t.ID, "failed", containerID, err.Error())
+		w.reportReplicaStatus(t.ID, "failed", containerID, err.Error())
 		return
 	}
 
-	w.logger.Infof("Task %s stopped successfully", t.Name)
+	w.logger.Infof("Replica %s stopped successfully", t.Name)
 	t.MarkCompleted()
-	w.reportTaskStatus(t.ID, "completed", containerID, "")
+	w.reportReplicaStatus(t.ID, "completed", containerID, "")
 }
 
-// reportTaskStatus sends a task status update to the Manager via HTTP PUT request.
-func (w *Worker) reportTaskStatus(taskID uuid.UUID, state, containerID, errMsg string) error {
-	req := api.TaskStatusUpdateRequest{
+// reportReplicaStatus sends a replica status update to the Manager via HTTP PUT request.
+func (w *Worker) reportReplicaStatus(replicaID uuid.UUID, state, containerID, errMsg string) error {
+	req := api.ReplicaStatusUpdateRequest{
 		State:       state,
 		ContainerID: containerID,
 		Error:       errMsg,
@@ -301,7 +301,7 @@ func (w *Worker) reportTaskStatus(taskID uuid.UUID, state, containerID, errMsg s
 		return fmt.Errorf("error marshaling status update: %v", err)
 	}
 
-	endpoint := fmt.Sprintf("http://%s/tasks/%s/status", w.managerAddr, taskID.String())
+	endpoint := fmt.Sprintf("http://%s/replicas/%s/status", w.managerAddr, replicaID.String())
 	httpReq, err := http.NewRequest("PUT", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
@@ -319,7 +319,7 @@ func (w *Worker) reportTaskStatus(taskID uuid.UUID, state, containerID, errMsg s
 		return fmt.Errorf("manager rejected status update, status code: %d", resp.StatusCode)
 	}
 
-	w.logger.Infof("Reported task %s status to manager: %s", taskID.String(), state)
+	w.logger.Infof("Reported replica %s status to manager: %s", replicaID.String(), state)
 	return nil
 }
 
