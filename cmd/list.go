@@ -107,6 +107,72 @@ var listCmd = &cli.Command{
 			},
 		},
 		{
+			Name:  "apps",
+			Usage: "List all deployed apps",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "manager",
+					Usage: "Manager address (default: localhost:5555)",
+					Value: "localhost:5555",
+				},
+			},
+			Action: func(c *cli.Context) error {
+				managerAddr := c.String("manager")
+				endpoint := fmt.Sprintf("http://%s/apps", managerAddr)
+
+				resp, err := http.Get(endpoint)
+				if err != nil {
+					fmt.Println("Error listing apps:", err)
+					return err
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK {
+					fmt.Printf("Error: received status code %d\n", resp.StatusCode)
+					return fmt.Errorf("failed to list apps")
+				}
+
+				// Parse response
+				var apps []map[string]interface{}
+				err = json.NewDecoder(resp.Body).Decode(&apps)
+				if err != nil {
+					fmt.Println("Error decoding response:", err)
+					return err
+				}
+
+				if len(apps) == 0 {
+					fmt.Println("No apps found")
+					return nil
+				}
+
+				// Print table header
+				fmt.Printf("%-30s %-15s %-15s %-20s\n", "NAME", "SERVICES", "REPLICAS", "CREATED")
+				fmt.Println("--------------------------------------------------------------------------------")
+
+				// Print apps
+				for _, app := range apps {
+					name := getStringField(app, "name")
+					serviceCount := getIntField(app, "service_count")
+					totalReplicas := getIntField(app, "total_replicas")
+					createdAt := getStringField(app, "created_at")
+
+					// Truncate long fields for display
+					if len(name) > 30 {
+						name = name[:27] + "..."
+					}
+
+					// Parse and format timestamp if available
+					if len(createdAt) > 20 {
+						createdAt = createdAt[:20]
+					}
+
+					fmt.Printf("%-30s %-15d %-15d %-20s\n", name, serviceCount, totalReplicas, createdAt)
+				}
+
+				return nil
+			},
+		},
+		{
 			Name:  "replicas",
 			Usage: "List all running replicas",
 			Flags: []cli.Flag{

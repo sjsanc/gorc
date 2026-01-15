@@ -1,6 +1,8 @@
 package api
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/metrics"
 )
@@ -87,4 +89,12 @@ type ServiceInfo struct {
 	Replicas      int    `json:"replicas"`
 	RestartPolicy string `json:"restart_policy"`
 	AppName       string `json:"app_name,omitempty"`
+}
+
+// AppInfo represents an app with aggregated service information for API responses.
+type AppInfo struct {
+	Name          string    `json:"name"`
+	ServiceCount  int       `json:"service_count"`
+	TotalReplicas int       `json:"total_replicas"`
+	CreatedAt     time.Time `json:"created_at"`
 }

@@ -41,6 +41,9 @@ gorc list nodes
 # List all registered workers
 gorc list workers
 
+# List all deployed apps (grouped services with replica counts)
+gorc list apps [--manager <address>]
+
 # List all deployed services
 gorc list services [--manager <address>]
 

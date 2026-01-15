@@ -319,7 +319,7 @@ func (w *Worker) reportReplicaStatus(replicaID uuid.UUID, state, containerID, er
 		return fmt.Errorf("manager rejected status update, status code: %d", resp.StatusCode)
 	}
 
-	w.logger.Infof("Reported replica %s status to manager: %s", replicaID.String(), state)
+	w.logger.Debugf("Reported replica %s status to manager: %s", replicaID.String(), state)
 	return nil
 }
 

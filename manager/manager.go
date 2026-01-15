@@ -617,3 +617,42 @@ func (m *Manager) deleteServicesForApp(appName string) error {
 	}
 	return nil
 }
+
+func (m *Manager) listApps() ([]*api.AppInfo, error) {
+	allServices, err := m.listServices()
+	if err != nil {
+		return nil, err
+	}
+
+	// Group services by app name
+	appMap := make(map[string]*api.AppInfo)
+	for _, svc := range allServices {
+		appName := svc.AppName
+		if appName == "" {
+			continue // Skip services not part of an app
+		}
+
+		if appMap[appName] == nil {
+			appMap[appName] = &api.AppInfo{
+				Name:      appName,
+				CreatedAt: svc.CreatedAt,
+			}
+		}
+
+		appMap[appName].ServiceCount++
+		appMap[appName].TotalReplicas += svc.Replicas
+
+		// Update CreatedAt to earliest service creation time
+		if svc.CreatedAt.Before(appMap[appName].CreatedAt) {
+			appMap[appName].CreatedAt = svc.CreatedAt
+		}
+	}
+
+	// Convert map to slice
+	var apps []*api.AppInfo
+	for _, app := range appMap {
+		apps = append(apps, app)
+	}
+
+	return apps, nil
+}

@@ -94,6 +94,7 @@ func (s *server) initRouter() {
 		r.Delete("/{serviceName}", s.handleDeleteService)
 	})
 	s.router.Route("/apps", func(r chi.Router) {
+		r.Get("/", s.handleListApps)
 		r.Get("/{appName}/services", s.handleListAppServices)
 		r.Delete("/{appName}", s.handleDeleteApp)
 	})
@@ -538,6 +539,23 @@ func (s *server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		"replicas":   svc.Replicas,
 		"status":     "updated",
 	})
+}
+
+// GET /apps - List all apps
+func (s *server) handleListApps(w http.ResponseWriter, r *http.Request) {
+	apps, err := s.manager.listApps()
+	if err != nil {
+		http.Error(w, "error listing apps", http.StatusInternalServerError)
+		return
+	}
+
+	if apps == nil {
+		apps = []*api.AppInfo{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(apps)
 }
 
 // GET /apps/{appName}/services - List all services for an app
