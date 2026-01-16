@@ -15,6 +15,13 @@ const (
 	RestartNever     RestartPolicy = "never"
 )
 
+type ServiceState string
+
+const (
+	StateRunning ServiceState = "running"
+	StateStopped ServiceState = "stopped"
+)
+
 // Service represents a declarative deployment configuration (desired state).
 type Service struct {
 	mu            sync.RWMutex
@@ -24,6 +31,7 @@ type Service struct {
 	Replicas      int            // Desired replica count
 	Cmd           []string       // Override container CMD
 	RestartPolicy RestartPolicy  // Restart behavior
+	State         ServiceState   // Current operational state (running/stopped)
 	AppName       string         // Optional: app this service belongs to
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -44,6 +52,7 @@ func NewServiceWithApp(name, image string, replicas int, cmd []string, restartPo
 		Replicas:      replicas,
 		Cmd:           cmd,
 		RestartPolicy: restartPolicy,
+		State:         StateRunning,
 		AppName:       appName,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
@@ -63,6 +72,7 @@ func (s *Service) Clone() *Service {
 		Replicas:      s.Replicas,
 		Cmd:           cmdCopy,
 		RestartPolicy: s.RestartPolicy,
+		State:         s.State,
 		AppName:       s.AppName,
 		CreatedAt:     s.CreatedAt,
 		UpdatedAt:     s.UpdatedAt,

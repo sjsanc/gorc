@@ -448,6 +448,7 @@ func (s *server) handleCreateOrUpdateService(w http.ResponseWriter, r *http.Requ
 		Replicas:      req.Replicas,
 		Cmd:           req.Cmd,
 		RestartPolicy: service.RestartPolicy(req.RestartPolicy),
+		State:         service.StateRunning,
 		AppName:       req.AppName,
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
@@ -557,8 +558,21 @@ func (s *server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update replicas
-	svc.Replicas = req.Replicas
+	// Update replicas if provided (0 is a valid value, so we check if it was explicitly set)
+	if req.Replicas >= 0 {
+		svc.Replicas = req.Replicas
+	}
+
+	// Update state if provided
+	if req.State != nil {
+		newState := service.ServiceState(*req.State)
+		if newState != service.StateRunning && newState != service.StateStopped {
+			http.Error(w, fmt.Sprintf("invalid state: %s (must be 'running' or 'stopped')", *req.State), http.StatusBadRequest)
+			return
+		}
+		svc.State = newState
+	}
+
 	svc.UpdatedAt = time.Now()
 
 	// Store the updated service
@@ -574,6 +588,7 @@ func (s *server) handleUpdateService(w http.ResponseWriter, r *http.Request) {
 		"service_id": svc.ID.String(),
 		"name":       svc.Name,
 		"replicas":   svc.Replicas,
+		"state":      svc.State,
 		"status":     "updated",
 	})
 }

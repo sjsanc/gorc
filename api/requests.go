@@ -78,7 +78,8 @@ type CreateServiceRequest struct {
 
 // UpdateServiceRequest is the request payload for updating an existing service.
 type UpdateServiceRequest struct {
-	Replicas int `json:"replicas"`
+	Replicas int     `json:"replicas,omitempty"`
+	State    *string `json:"state,omitempty"` // "running" or "stopped"
 }
 
 // ServiceInfo represents a service for API responses.

@@ -48,6 +48,17 @@ func (m *Manager) reconcileServices() {
 
 // reconcileService reconciles a single service by comparing desired vs actual replicas.
 func (m *Manager) reconcileService(svc *service.Service) error {
+	// Default empty state to running (for backward compatibility with existing services)
+	if svc.State == "" {
+		svc.State = service.StateRunning
+		m.services.Put(svc.ID.String(), svc)
+	}
+
+	// Skip reconciliation for stopped services
+	if svc.State == service.StateStopped {
+		return nil
+	}
+
 	replicas, err := m.getReplicasForService(svc.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get replicas: %v", err)
@@ -100,9 +111,10 @@ func (m *Manager) reconcileService(svc *service.Service) error {
 		deficit := desiredReplicas - actualReplicas
 		m.logger.Infof("reconciliation: scaling up service %s (%d -> %d replicas)", svc.Name, actualReplicas, desiredReplicas)
 
+		// Calculate starting replica ID once before the loop
+		nextID := m.nextReplicaID(replicas)
 		for i := 0; i < deficit; i++ {
-			replicaID := m.nextReplicaID(replicas)
-			newReplica := m.createReplicaForService(svc, replicaID)
+			newReplica := m.createReplicaForService(svc, nextID)
 			if err := m.scheduleReplica(newReplica); err != nil {
 				m.logger.Errorf("failed to scale up: %v", err)
 				// Clean up the newly created replica since scheduling failed
@@ -111,6 +123,7 @@ func (m *Manager) reconcileService(svc *service.Service) error {
 				}
 				break
 			}
+			nextID++ // Increment for next replica
 		}
 	}
 

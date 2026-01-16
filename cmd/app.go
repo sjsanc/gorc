@@ -137,7 +137,42 @@ var appStopCmd = &cli.Command{
 
 		fmt.Printf("Stopping app '%s' (%d service(s))...\n", appName, len(services))
 
-		// Get all replicas and stop them (keep service desired replica count intact)
+		// Mark all services as stopped to prevent reconciliation from restarting replicas
+		stoppedState := "stopped"
+		for _, svc := range services {
+			updateReq := api.UpdateServiceRequest{
+				State: &stoppedState,
+			}
+
+			jsonData, err := json.Marshal(updateReq)
+			if err != nil {
+				fmt.Printf("  ✗ Error marshaling request for service '%s': %v\n", svc.Name, err)
+				continue
+			}
+
+			updateEndpoint := fmt.Sprintf("http://%s/services/%s", managerAddr, svc.ID.String())
+			req, err := http.NewRequest("PUT", updateEndpoint, bytes.NewBuffer(jsonData))
+			if err != nil {
+				fmt.Printf("  ✗ Error creating request for service '%s': %v\n", svc.Name, err)
+				continue
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Printf("  ✗ Error stopping service '%s': %v\n", svc.Name, err)
+				continue
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				fmt.Printf("  ✗ Failed to stop service '%s' (status %d): %s\n", svc.Name, resp.StatusCode, string(body))
+			}
+		}
+
+		// Get all replicas and stop them
 		var replicasToStop []string
 		for _, svc := range services {
 			replicasEndpoint := fmt.Sprintf("http://%s/services/%s/replicas", managerAddr, svc.ID.String())
@@ -407,8 +442,10 @@ var appRestartCmd = &cli.Command{
 					go func(svc *service.Service) {
 						defer wg.Done()
 
+						runningState := "running"
 						updateReq := api.UpdateServiceRequest{
 							Replicas: svc.Replicas,
+							State:    &runningState,
 						}
 
 						jsonData, err := json.Marshal(updateReq)
