@@ -204,7 +204,7 @@ func (w *Worker) handleDeploy(t *replica.Replica) {
 		return
 	}
 
-	w.logger.Infof("Replica %s started successfully (container: %s)", logger.ColorizeReplica(t.Name), containerID)
+	w.logger.Infof("Replica %s started successfully", logger.ColorizeReplica(t.Name))
 	t.MarkRunning(containerID)
 
 	// Report running status to manager
@@ -224,7 +224,7 @@ func (w *Worker) handleDeploy(t *replica.Replica) {
 // monitorReplicaCompletion waits for a container to finish and reports the final status.
 // It respects context cancellation to ensure graceful shutdown.
 func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
-	w.logger.Infof("Monitoring completion for replica: %s (container: %s)", logger.ColorizeReplica(t.Name), t.GetContainerID())
+	w.logger.Infof("Monitoring completion for replica: %s", logger.ColorizeReplica(t.Name))
 
 	// Create a channel to receive the exit code
 	exitCodeChan := make(chan int64, 1)
@@ -268,7 +268,7 @@ func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
 // handleStop stops a running container for the given replica.
 func (w *Worker) handleStop(t *replica.Replica) {
 	containerID := t.GetContainerID()
-	w.logger.Infof("Stopping replica: %s (container: %s)", logger.ColorizeReplica(t.Name), containerID)
+	w.logger.Infof("Stopping replica: %s", logger.ColorizeReplica(t.Name))
 
 	if containerID == "" {
 		w.logger.Warnf("Replica %s has no container ID, marking completed", logger.ColorizeReplica(t.Name))

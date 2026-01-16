@@ -2,8 +2,8 @@
 name = "alpine"
 
 [[app.services]]
-name = "alpine"
+name = "worker"
 image = "alpine:latest"
-cmd = ["sh", "-c", "sleep infinity"]
-replicas = 2
-restart_policy = "never"
+replicas = 3
+restart_policy = "on-failure"
+cmd = ["sh", "-c", "echo 'Container started' && sleep infinity"]

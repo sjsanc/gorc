@@ -614,12 +614,53 @@ func (m *Manager) detectDeadWorkers(heartbeatTimeout time.Duration, checkInterva
 						err := m.workers.Delete(worker.ID.String())
 						if err != nil {
 							m.logger.Errorf("error removing dead worker %s: %v", worker.ID.String(), err)
+						} else {
+							// Worker deleted successfully, mark orphaned replicas
+							if err := m.detectOrphanedReplicas(worker.ID); err != nil {
+								m.logger.Errorf("failed to detect orphaned replicas: %v", err)
+							}
 						}
 					}
 				}
 			}
 		}
 	}()
+}
+
+// detectOrphanedReplicas marks replicas as failed when their assigned worker dies.
+func (m *Manager) detectOrphanedReplicas(deadWorkerID uuid.UUID) error {
+	allReplicas, err := m.listReplicas()
+	if err != nil {
+		return fmt.Errorf("error listing replicas: %v", err)
+	}
+
+	orphanedCount := 0
+	for _, r := range allReplicas {
+		// Check if replica was assigned to the dead worker
+		if r.WorkerID == deadWorkerID {
+			// Only mark Running or Pending replicas as failed
+			if r.State == replica.ReplicaRunning || r.State == replica.ReplicaPending {
+				m.logger.Warnf("Marked orphaned replica %s as failed (worker %s died)", logger.ColorizeReplica(r.Name), deadWorkerID.String())
+
+				// Mark replica as failed with error message
+				r.SetError("worker died")
+
+				// Update replica in storage
+				err := m.replicas.Put(r.ID.String(), r)
+				if err != nil {
+					m.logger.Errorf("failed to update orphaned replica %s: %v", logger.ColorizeReplica(r.Name), err)
+					continue
+				}
+				orphanedCount++
+			}
+		}
+	}
+
+	if orphanedCount > 0 {
+		m.logger.Warnf("Marked %d orphaned replica(s) as failed due to worker death", orphanedCount)
+	}
+
+	return nil
 }
 
 func (m *Manager) collectAndStoreMetrics() {

@@ -71,15 +71,29 @@ func (m *Manager) reconcileService(svc *service.Service) error {
 	actualReplicas := len(running) + len(pending)
 
 	// Handle failed replicas based on restart policy
+	restartedCount := 0
 	for _, failedReplica := range failed {
 		if m.shouldRestart(svc, failedReplica) {
 			m.logger.Infof("reconciliation: restarting failed replica %s (service: %s)", logger.ColorizeReplica(failedReplica.Name), svc.Name)
 			newReplica := m.createReplicaForService(svc, failedReplica.ReplicaID)
 			if err := m.scheduleReplica(newReplica); err != nil {
 				m.logger.Errorf("failed to restart replica: %v", err)
+				// Clean up the newly created replica since scheduling failed
+				if delErr := m.deleteReplica(newReplica.ID); delErr != nil {
+					m.logger.Errorf("failed to delete unscheduled replica %s: %v", logger.ColorizeReplica(newReplica.Name), delErr)
+				}
+				continue
 			}
+			// Delete the old failed replica after successfully restarting
+			if err := m.deleteReplica(failedReplica.ID); err != nil {
+				m.logger.Errorf("failed to delete old failed replica %s: %v", logger.ColorizeReplica(failedReplica.Name), err)
+			}
+			restartedCount++
 		}
 	}
+
+	// Recalculate actual replicas after restarts
+	actualReplicas += restartedCount
 
 	// Scale up: create missing replicas
 	if actualReplicas < desiredReplicas {
@@ -91,6 +105,10 @@ func (m *Manager) reconcileService(svc *service.Service) error {
 			newReplica := m.createReplicaForService(svc, replicaID)
 			if err := m.scheduleReplica(newReplica); err != nil {
 				m.logger.Errorf("failed to scale up: %v", err)
+				// Clean up the newly created replica since scheduling failed
+				if delErr := m.deleteReplica(newReplica.ID); delErr != nil {
+					m.logger.Errorf("failed to delete unscheduled replica %s: %v", logger.ColorizeReplica(newReplica.Name), delErr)
+				}
 				break
 			}
 		}

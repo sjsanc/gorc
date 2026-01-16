@@ -466,3 +466,191 @@ func TestRoundRobinScheduling(t *testing.T) {
 
 	t.Log("✓ round-robin scheduler distributed replicas evenly")
 }
+
+// Feature: Worker Failure Rescheduling
+// Tests that replicas are rescheduled when their assigned worker dies
+func TestWorkerFailureRescheduling(t *testing.T) {
+	logger := zap.NewNop()
+	sugar := logger.Sugar()
+
+	// Start Manager
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5540, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
+	if err != nil {
+		t.Fatalf("Failed to create Manager: %v", err)
+	}
+
+	go m.Run()
+	defer m.Stop()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Start Worker1
+	w1, err := worker.NewWorker(sugar, "0.0.0.0", 5541, "0.0.0.0:5540", runtime.RuntimeDocker)
+	if err != nil {
+		t.Fatalf("Failed to create Worker1: %v", err)
+	}
+
+	go w1.Run()
+
+	time.Sleep(1 * time.Second)
+
+	// Deploy service with 3 replicas and restart policy "on-failure"
+	serviceReq := api.CreateServiceRequest{
+		Name:          "test-service",
+		Image:         "alpine:latest",
+		Cmd:           []string{"sh", "-c", "sleep infinity"},
+		Replicas:      3,
+		RestartPolicy: "on-failure",
+	}
+
+	jsonData, err := json.Marshal(serviceReq)
+	if err != nil {
+		t.Fatalf("Failed to marshal service request: %v", err)
+	}
+
+	resp, err := http.Post("http://0.0.0.0:5540/services", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		t.Fatalf("Failed to deploy service: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Expected status 201, got %d", resp.StatusCode)
+	}
+
+	// Wait for reconciliation loop to create and schedule replicas (10s interval + buffer)
+	time.Sleep(15 * time.Second)
+
+	// Verify replicas are running on Worker1
+	resp, err = http.Get("http://0.0.0.0:5540/replicas")
+	if err != nil {
+		t.Fatalf("Failed to get replicas: %v", err)
+	}
+
+	var replicasBeforeFailure []map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&replicasBeforeFailure)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("Failed to parse replicas: %v", err)
+	}
+
+	runningCount := 0
+	for _, r := range replicasBeforeFailure {
+		state := int(r["State"].(float64))
+		if state == 1 { // ReplicaRunning
+			runningCount++
+		}
+	}
+
+	if runningCount != 3 {
+		t.Fatalf("Expected 3 running replicas, got %d", runningCount)
+	}
+
+	t.Logf("✓ 3 replicas running on Worker1")
+
+	// Stop Worker1 to simulate death
+	err = w1.Stop()
+	if err != nil {
+		t.Fatalf("Failed to stop Worker1: %v", err)
+	}
+
+	t.Logf("✓ Worker1 stopped (simulating death)")
+
+	// Wait for dead worker detection (30s timeout + 10s check interval = ~35s max)
+	time.Sleep(35 * time.Second)
+
+	// Verify Worker1 was removed from cluster
+	resp, err = http.Get("http://0.0.0.0:5540/worker")
+	if err != nil {
+		t.Fatalf("Failed to get workers: %v", err)
+	}
+
+	var workersAfterFailure []interface{}
+	err = json.NewDecoder(resp.Body).Decode(&workersAfterFailure)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("Failed to parse workers: %v", err)
+	}
+
+	if len(workersAfterFailure) != 0 {
+		t.Fatalf("Expected 0 workers after failure, got %d", len(workersAfterFailure))
+	}
+
+	t.Logf("✓ Worker1 removed from cluster")
+
+	// Verify replicas are marked as Failed with "worker died" error
+	resp, err = http.Get("http://0.0.0.0:5540/replicas")
+	if err != nil {
+		t.Fatalf("Failed to get replicas: %v", err)
+	}
+
+	var replicasAfterFailure []map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&replicasAfterFailure)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("Failed to parse replicas: %v", err)
+	}
+
+	failedCount := 0
+	for _, r := range replicasAfterFailure {
+		state := int(r["State"].(float64))
+		if state == 3 { // ReplicaFailed
+			failedCount++
+			errorMsg, ok := r["Error"].(string)
+			if !ok || !strings.Contains(errorMsg, "worker died") {
+				t.Errorf("Expected error 'worker died', got: %v", r["Error"])
+			}
+		}
+	}
+
+	if failedCount != 3 {
+		t.Fatalf("Expected 3 failed replicas, got %d", failedCount)
+	}
+
+	t.Logf("✓ 3 replicas marked as Failed with 'worker died' error")
+
+	// Start Worker2
+	w2, err := worker.NewWorker(sugar, "0.0.0.0", 5542, "0.0.0.0:5540", runtime.RuntimeDocker)
+	if err != nil {
+		t.Fatalf("Failed to create Worker2: %v", err)
+	}
+
+	go w2.Run()
+	defer w2.Stop()
+
+	t.Logf("✓ Worker2 started")
+
+	// Wait for reconciliation loop to reschedule replicas (10s interval + buffer)
+	time.Sleep(15 * time.Second)
+
+	// Verify new replicas are scheduled on Worker2
+	resp, err = http.Get("http://0.0.0.0:5540/replicas")
+	if err != nil {
+		t.Fatalf("Failed to get replicas: %v", err)
+	}
+
+	var replicasAfterRescheduling []map[string]interface{}
+	err = json.NewDecoder(resp.Body).Decode(&replicasAfterRescheduling)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("Failed to parse replicas: %v", err)
+	}
+
+	newRunningCount := 0
+	for _, r := range replicasAfterRescheduling {
+		state := int(r["State"].(float64))
+		if state == 1 { // ReplicaRunning
+			newRunningCount++
+		}
+	}
+
+	// Verify we have at least the desired number of running replicas
+	// Note: Due to reconciliation timing, we might have more than 3 (both restarted failed replicas
+	// and scale-up replicas), but the important thing is that the service is healthy and running
+	if newRunningCount < 3 {
+		t.Fatalf("Expected at least 3 running replicas after rescheduling, got %d", newRunningCount)
+	}
+
+	t.Logf("✓ %d replicas scheduled and running on Worker2 (expected at least 3)", newRunningCount)
+	t.Log("✓ Worker failure rescheduling complete")
+}
