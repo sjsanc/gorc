@@ -41,6 +41,10 @@ type Worker struct {
 	runtime runtime.Runtime
 	// `metricsCollector` collects system metrics for this worker node.
 	metricsCollector metrics.Collector
+	// `stoppingReplicas` tracks replicas being intentionally stopped to distinguish from crashes.
+	stoppingReplicas map[uuid.UUID]bool
+	// `stoppingMutex` protects concurrent access to stoppingReplicas map.
+	stoppingMutex sync.RWMutex
 	// `ctx` is the context for the Worker and its background goroutines.
 	ctx context.Context
 	// `cancel` cancels the Worker context.
@@ -78,6 +82,7 @@ func NewWorker(logger *zap.SugaredLogger, addr string, port int, managerAddr str
 		events:           utils.NewQueue[replica.Event](),
 		runtime:          rt,
 		metricsCollector: collector,
+		stoppingReplicas: make(map[uuid.UUID]bool),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -251,9 +256,20 @@ func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
 		w.reportReplicaStatus(t.ID, "failed", t.GetContainerID(), err.Error())
 		return
 	case exitCode := <-exitCodeChan:
+		// Check if replica is being intentionally stopped
+		isStopping := w.isReplicaStopping(t.ID)
+		if isStopping {
+			w.cleanupStoppingReplica(t.ID)
+		}
+
 		// Check exit code to determine if replica succeeded or failed
 		if exitCode == 0 {
 			w.logger.Infof("Replica %s completed successfully (exit code: %d)", logger.ColorizeReplica(t.Name), exitCode)
+			t.MarkCompleted()
+			w.reportReplicaStatus(t.ID, "completed", t.GetContainerID(), "")
+		} else if isStopping && (exitCode == 137 || exitCode == 143) {
+			// Exit codes 137 (SIGKILL) and 143 (SIGTERM) are expected when intentionally stopping
+			w.logger.Infof("Replica %s stopped (exit code: %d)", logger.ColorizeReplica(t.Name), exitCode)
 			t.MarkCompleted()
 			w.reportReplicaStatus(t.ID, "completed", t.GetContainerID(), "")
 		} else {
@@ -270,10 +286,16 @@ func (w *Worker) handleStop(t *replica.Replica) {
 	containerID := t.GetContainerID()
 	w.logger.Infof("Stopping replica: %s", logger.ColorizeReplica(t.Name))
 
+	// Mark replica as intentionally stopping to distinguish from crashes
+	w.stoppingMutex.Lock()
+	w.stoppingReplicas[t.ID] = true
+	w.stoppingMutex.Unlock()
+
 	if containerID == "" {
 		w.logger.Warnf("Replica %s has no container ID, marking completed", logger.ColorizeReplica(t.Name))
 		t.MarkCompleted()
 		w.reportReplicaStatus(t.ID, "completed", "", "")
+		w.cleanupStoppingReplica(t.ID)
 		return
 	}
 
@@ -284,12 +306,14 @@ func (w *Worker) handleStop(t *replica.Replica) {
 			w.logger.Warnf("Container already removed for replica %s", logger.ColorizeReplica(t.Name))
 			t.MarkCompleted()
 			w.reportReplicaStatus(t.ID, "completed", containerID, "")
+			w.cleanupStoppingReplica(t.ID)
 			return
 		}
 
 		w.logger.Errorf("Failed to stop replica %s: %v", logger.ColorizeReplica(t.Name), err)
 		t.SetError(err.Error())
 		w.reportReplicaStatus(t.ID, "failed", containerID, err.Error())
+		w.cleanupStoppingReplica(t.ID)
 		return
 	}
 
@@ -329,7 +353,6 @@ func (w *Worker) reportReplicaStatus(replicaID uuid.UUID, state, containerID, er
 		return fmt.Errorf("manager rejected status update, status code: %d", resp.StatusCode)
 	}
 
-	w.logger.Debugf("Reported replica %s status to manager: %s", logger.ColorizeReplica(replicaID.String()), state)
 	return nil
 }
 
@@ -409,6 +432,20 @@ func (w *Worker) pushMetrics(m *metrics.Metrics) {
 	if resp.StatusCode != http.StatusOK {
 		w.logger.Warnf("manager rejected metrics, status code: %d", resp.StatusCode)
 	}
+}
+
+// cleanupStoppingReplica removes a replica from the stopping tracking map.
+func (w *Worker) cleanupStoppingReplica(replicaID uuid.UUID) {
+	w.stoppingMutex.Lock()
+	defer w.stoppingMutex.Unlock()
+	delete(w.stoppingReplicas, replicaID)
+}
+
+// isReplicaStopping checks if a replica is being intentionally stopped.
+func (w *Worker) isReplicaStopping(replicaID uuid.UUID) bool {
+	w.stoppingMutex.RLock()
+	defer w.stoppingMutex.RUnlock()
+	return w.stoppingReplicas[replicaID]
 }
 
 // isContainerNotFoundError checks if the error is due to container not being found.
