@@ -26,3 +26,8 @@ const (
 	DefaultHeartbeatTimeout = 30 * time.Second
 	DefaultHeartbeatCheck   = 10 * time.Second
 )
+
+// Scheduler configuration
+const (
+	DefaultSchedulerType = "roundrobin"
+)

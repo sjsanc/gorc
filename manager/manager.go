@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
+	"github.com/sjsanc/gorc/manager/scheduler"
 	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/replica"
@@ -23,15 +24,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// `managedWorker` represents the Manager's view of a Worker within the Cluster.
-type ManagedWorker struct {
-	ID            uuid.UUID
-	Name          string
-	Address       string
-	Port          int
-	Node          *node.Node
-	LastHeartbeat time.Time
-}
+// ManagedWorker is defined in the scheduler subpackage since it's used by both
+// manager and schedulers. Re-export it here for convenience.
+type ManagedWorker = scheduler.ManagedWorker
 
 type Manager struct {
 	// `logger` is the Manager logger.
@@ -50,6 +45,8 @@ type Manager struct {
 	services storage.Store[service.Service]
 	// `metricsCollector` collects system metrics for this manager node.
 	metricsCollector metrics.Collector
+	// `sched` determines which worker gets assigned new replicas.
+	sched scheduler.Scheduler
 	// `ctx` is the context for the Manager and its background goroutines.
 	ctx context.Context
 	// `cancel` cancels the Manager context.
@@ -58,7 +55,7 @@ type Manager struct {
 	wg sync.WaitGroup
 }
 
-func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType storage.StorageType, runtimeType runtime.RuntimeType) (*Manager, error) {
+func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType storage.StorageType, runtimeType runtime.RuntimeType, schedulerType scheduler.Type) (*Manager, error) {
 	// Create the Manager Node
 	hn, err := os.Hostname()
 	if err != nil {
@@ -93,6 +90,12 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 		return nil, fmt.Errorf("error creating metrics collector: %v", err)
 	}
 
+	// Create scheduler
+	sched, err := scheduler.New(schedulerType)
+	if err != nil {
+		return nil, fmt.Errorf("error creating scheduler: %v", err)
+	}
+
 	// Create a new Manager instance
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
@@ -104,6 +107,7 @@ func NewManager(logger *zap.SugaredLogger, addr string, port int, storageType st
 		replicas:         replicasStore,
 		services:         servicesStore,
 		metricsCollector: collector,
+		sched:            sched,
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -307,6 +311,30 @@ func (m *Manager) listReplicas() ([]*replica.Replica, error) {
 	return replicas, nil
 }
 
+// getReplicaDistributionByHost returns a map of hostname -> count of replicas for a given service.
+func (m *Manager) getReplicaDistributionByHost(serviceID uuid.UUID) (map[string]int, error) {
+	replicas, err := m.listReplicas()
+	if err != nil {
+		return nil, err
+	}
+
+	distribution := make(map[string]int)
+	for _, r := range replicas {
+		if r.ServiceID == serviceID && r.State == replica.ReplicaRunning {
+			// Get the worker for this replica to find its hostname
+			worker, err := m.workers.Get(r.WorkerID.String())
+			if err != nil || worker == nil {
+				continue
+			}
+			if worker.Node != nil {
+				distribution[worker.Node.Hostname]++
+			}
+		}
+	}
+
+	return distribution, nil
+}
+
 func (m *Manager) scheduleReplica(r *replica.Replica) error {
 	// Get list of available workers
 	workers, err := m.listWorkers()
@@ -318,8 +346,27 @@ func (m *Manager) scheduleReplica(r *replica.Replica) error {
 		return fmt.Errorf("no workers available for scheduling")
 	}
 
-	// Simple scheduling: pick the first worker (MVP strategy)
-	worker := workers[0]
+	// Get nodes for the scheduler
+	nodes, err := m.listNodes()
+	if err != nil {
+		return fmt.Errorf("error listing nodes: %v", err)
+	}
+
+	// Build replica distribution for spread scheduler
+	replicaDist := make(map[string]int)
+	if r.ServiceID != uuid.Nil {
+		replicaDist, err = m.getReplicaDistributionByHost(r.ServiceID)
+		if err != nil {
+			m.logger.Warnf("failed to get replica distribution: %v", err)
+		}
+	}
+
+	// Use scheduler to select worker
+	worker, err := m.sched.Schedule(r, workers, nodes, replicaDist)
+	if err != nil {
+		return fmt.Errorf("error scheduling replica: %v", err)
+	}
+
 	r.SetWorkerID(worker.ID)
 
 	// Update replica in store with assigned worker

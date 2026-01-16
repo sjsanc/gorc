@@ -6,8 +6,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/sjsanc/gorc/config"
 	"github.com/sjsanc/gorc/logger"
 	"github.com/sjsanc/gorc/manager"
+	"github.com/sjsanc/gorc/manager/scheduler"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/storage"
 	"github.com/urfave/cli/v2"
@@ -41,6 +43,12 @@ var managerCmd = &cli.Command{
 			Usage:   "Container runtime to use (docker, podman)",
 			Value:   "docker",
 		},
+		&cli.StringFlag{
+			Name:    "scheduler",
+			Aliases: []string{"sched"},
+			Usage:   "Scheduling strategy (roundrobin, spread)",
+			Value:   config.DefaultSchedulerType,
+		},
 	},
 	Action: func(c *cli.Context) error {
 		addr := c.String("address")
@@ -60,7 +68,13 @@ var managerCmd = &cli.Command{
 			return err
 		}
 
-		m, err := manager.NewManager(logger.Log, addr, port, storageType, runtimeType)
+		schedulerType, err := scheduler.Parse(c.String("scheduler"))
+		if err != nil {
+			fmt.Println("Unknown scheduler type:", err)
+			return err
+		}
+
+		m, err := manager.NewManager(logger.Log, addr, port, storageType, runtimeType, schedulerType)
 		if err != nil {
 			fmt.Println("Error creating manager:", err)
 			return err

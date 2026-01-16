@@ -3,13 +3,16 @@ package tests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/manager"
+	"github.com/sjsanc/gorc/manager/scheduler"
 	"github.com/sjsanc/gorc/runtime"
 	"github.com/sjsanc/gorc/storage"
 	"github.com/sjsanc/gorc/worker"
@@ -21,7 +24,7 @@ func TestManagerInitialization(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, err := manager.NewManager(sugar, "0.0.0.0", 5500, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5500, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	if err != nil {
 		t.Fatalf("Failed to create Manager: %v", err)
 	}
@@ -49,7 +52,7 @@ func TestWorkerRegistration(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	go m.Run()
 	defer m.Stop()
 
@@ -84,7 +87,7 @@ func TestNodeRegistry(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	go m.Run()
 	defer m.Stop()
 
@@ -119,7 +122,7 @@ func TestreplicaDeployment(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	go m.Run()
 	defer m.Stop()
 
@@ -155,7 +158,7 @@ func TestreplicaEventProcessing(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, _ := manager.NewManager(sugar, "0.0.0.0", 5555, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	go m.Run()
 	defer m.Stop()
 
@@ -196,7 +199,7 @@ func TestGracefulShutdown(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
-	m, err := manager.NewManager(sugar, "0.0.0.0", 5510, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5510, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	if err != nil {
 		t.Fatalf("Failed to create Manager: %v", err)
 	}
@@ -246,7 +249,7 @@ func TestDeployWithCustomArgs(t *testing.T) {
 	sugar := logger.Sugar()
 
 	// Start Manager
-	m, err := manager.NewManager(sugar, "0.0.0.0", 5520, storage.StorageInMemory, runtime.RuntimeDocker)
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5520, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
 	if err != nil {
 		t.Fatalf("Failed to create Manager: %v", err)
 	}
@@ -367,4 +370,99 @@ func TestDeployWithCustomArgs(t *testing.T) {
 	}
 
 	t.Log("✓ replica deployed successfully with custom arguments")
+}
+
+// Feature: Round-Robin Scheduling
+// Tests that the round-robin scheduler distributes replicas evenly across workers
+func TestRoundRobinScheduling(t *testing.T) {
+	logger := zap.NewNop()
+	sugar := logger.Sugar()
+
+	// Create manager with round-robin scheduler
+	m, err := manager.NewManager(sugar, "0.0.0.0", 5530, storage.StorageInMemory, runtime.RuntimeDocker, scheduler.TypeRoundRobin)
+	if err != nil {
+		t.Fatalf("Failed to create Manager: %v", err)
+	}
+
+	go m.Run()
+	defer m.Stop()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Start 3 workers on the same node
+	workers := make([]*worker.Worker, 3)
+	workerPorts := []int{5531, 5532, 5533}
+	for i := 0; i < 3; i++ {
+		w, err := worker.NewWorker(sugar, "0.0.0.0", workerPorts[i], "0.0.0.0:5530", runtime.RuntimeDocker)
+		if err != nil {
+			t.Fatalf("Failed to create Worker %d: %v", i, err)
+		}
+		workers[i] = w
+		go w.Run()
+		defer w.Stop()
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// Deploy 9 replicas (should distribute as 3 per worker with round-robin)
+	for i := 0; i < 9; i++ {
+		deployReq := api.DeployRequest{
+			Name:  fmt.Sprintf("test-rr-replica-%d", i),
+			Image: "alpine:latest",
+		}
+
+		jsonData, err := json.Marshal(deployReq)
+		if err != nil {
+			t.Fatalf("Failed to marshal request: %v", err)
+		}
+
+		resp, err := http.Post("http://0.0.0.0:5530/replicas", "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			t.Fatalf("Failed to deploy replica %d: %v", i, err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("Expected status 201, got %d for replica %d", resp.StatusCode, i)
+		}
+	}
+
+	// Wait for replicas to be distributed
+	time.Sleep(2 * time.Second)
+
+	// Verify round-robin distribution: each worker should have 3 replicas
+	expectedPerWorker := 3
+	for i, port := range workerPorts {
+		endpoint := fmt.Sprintf("http://0.0.0.0:%d/replicas", port)
+		resp, err := http.Get(endpoint)
+		if err != nil {
+			t.Fatalf("Failed to get replicas from worker %d: %v", i, err)
+		}
+		defer resp.Body.Close()
+
+		var replicas []interface{}
+		err = json.NewDecoder(resp.Body).Decode(&replicas)
+		if err != nil {
+			t.Fatalf("Failed to parse replicas from worker %d: %v", i, err)
+		}
+
+		// Count test-rr-replica replicas
+		count := 0
+		for _, replicaInterface := range replicas {
+			replica, ok := replicaInterface.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			replicaName, ok := replica["Name"].(string)
+			if ok && strings.HasPrefix(replicaName, "test-rr-replica-") {
+				count++
+			}
+		}
+
+		if count != expectedPerWorker {
+			t.Errorf("Worker %d: expected %d replicas, got %d", i, expectedPerWorker, count)
+		}
+	}
+
+	t.Log("✓ round-robin scheduler distributed replicas evenly")
 }

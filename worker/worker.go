@@ -140,7 +140,7 @@ func (w *Worker) registerWithManager() error {
 		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
 
-	w.logger.Debugf("Sending worker registration: %v", string(jsonData))
+	w.logger.Debugf("Sending registration for worker %s", req.WorkerName)
 
 	endpoint := fmt.Sprintf("http://%s/worker", w.managerAddr)
 	b := bytes.NewBuffer(jsonData)
