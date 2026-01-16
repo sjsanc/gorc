@@ -5,5 +5,5 @@ name = "alpine"
 name = "alpine"
 image = "alpine:latest"
 cmd = ["sh", "-c", "sleep infinity"]
-replicas = 5
+replicas = 2
 restart_policy = "never"

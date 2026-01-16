@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
+	"github.com/sjsanc/gorc/logger"
 	"github.com/sjsanc/gorc/manager/scheduler"
 	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
@@ -184,6 +185,33 @@ func (m *Manager) listNodes() ([]*node.Node, error) {
 	return nodes, nil
 }
 
+// allocateWorkerName allocates a unique worker name based on hostname.
+// Format: hostname-N where N is an incremental suffix (0, 1, 2, ...)
+func (m *Manager) allocateWorkerName(hostname string) string {
+	workers, err := m.listWorkers()
+	if err != nil {
+		// If we can't list workers, just use suffix 0
+		return fmt.Sprintf("%s-0", hostname)
+	}
+
+	maxSuffix := -1
+	for _, worker := range workers {
+		if strings.HasPrefix(worker.Name, hostname+"-") {
+			// Extract suffix
+			suffix := strings.TrimPrefix(worker.Name, hostname+"-")
+			// Parse suffix as integer
+			var num int
+			if _, err := fmt.Sscanf(suffix, "%d", &num); err == nil {
+				if num > maxSuffix {
+					maxSuffix = num
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%s-%d", hostname, maxSuffix+1)
+}
+
 func (m *Manager) registerWorker(req api.RegisterWorkerRequest) (*ManagedWorker, error) {
 	id, err := uuid.Parse(req.WorkerID)
 	if err != nil {
@@ -196,16 +224,19 @@ func (m *Manager) registerWorker(req api.RegisterWorkerRequest) (*ManagedWorker,
 		address = "127.0.0.1"
 	}
 
+	// Allocate unique worker name based on hostname
+	workerName := m.allocateWorkerName(req.Hostname)
+
 	// Register/update node for this worker
-	workerNode := node.NewNode(req.WorkerName, address, req.WorkerPort, 0)
+	workerNode := node.NewNode(req.Hostname, address, req.WorkerPort, 0)
 	registeredNode, err := m.registerNode(workerNode)
 	if err != nil {
-		m.logger.Warnf("failed to register node for worker %s: %v", req.WorkerName, err)
+		m.logger.Warnf("failed to register node for worker %s: %v", logger.ColorizeWorker(workerName), err)
 	}
 
 	mw := &ManagedWorker{
 		ID:            id,
-		Name:          req.WorkerName,
+		Name:          workerName,
 		Address:       address,
 		Port:          req.WorkerPort,
 		Node:          registeredNode,
@@ -217,7 +248,7 @@ func (m *Manager) registerWorker(req api.RegisterWorkerRequest) (*ManagedWorker,
 		return nil, fmt.Errorf("error registering Worker: %v", err)
 	}
 
-	m.logger.Infof("Worker registered: %s at %s:%d", req.WorkerName, address, req.WorkerPort)
+	m.logger.Infof("Worker registered: %s at %s:%d", logger.ColorizeWorker(workerName), address, req.WorkerPort)
 
 	return mw, nil
 }
@@ -236,7 +267,7 @@ func (m *Manager) createReplica(name, image string, args []string) (*replica.Rep
 	if err != nil {
 		return nil, fmt.Errorf("error creating replica: %v", err)
 	}
-	m.logger.Infof("Replica created: %s (%s)", r.Name, r.ID.String())
+	m.logger.Infof("Replica created: %s (%s)", logger.ColorizeReplica(r.Name), r.ID.String())
 	return r, nil
 }
 
@@ -261,7 +292,7 @@ func (m *Manager) updateReplicaState(id uuid.UUID, state replica.ReplicaState) e
 	if err != nil {
 		return fmt.Errorf("error updating replica state: %v", err)
 	}
-	m.logger.Infof("Replica state updated: %s -> %v", r.Name, state)
+	m.logger.Infof("Replica state updated: %s -> %v", logger.ColorizeReplica(r.Name), state)
 	return nil
 }
 
@@ -299,7 +330,7 @@ func (m *Manager) updateReplicaStatus(replicaIDStr string, req api.ReplicaStatus
 		return fmt.Errorf("error updating replica: %v", err)
 	}
 
-	m.logger.Infof("Replica status updated: %s -> %s", r.Name, req.State)
+	m.logger.Infof("Replica status updated: %s -> %s", logger.ColorizeReplica(r.Name), req.State)
 	return nil
 }
 
@@ -407,7 +438,7 @@ func (m *Manager) scheduleReplica(r *replica.Replica) error {
 		return fmt.Errorf("error updating replica state: %v", err)
 	}
 
-	m.logger.Infof("Replica %s scheduled to worker %s", r.Name, worker.Name)
+	m.logger.Infof("Replica %s scheduled to worker %s", logger.ColorizeReplica(r.Name), logger.ColorizeWorker(worker.Name))
 	return nil
 }
 
@@ -451,7 +482,7 @@ func (m *Manager) stopReplica(replicaID uuid.UUID) error {
 		return fmt.Errorf("worker rejected stop request: %d", resp.StatusCode)
 	}
 
-	m.logger.Infof("Stop request sent to worker for replica %s", r.Name)
+	m.logger.Infof("Stop request sent to worker for replica %s", logger.ColorizeReplica(r.Name))
 	return nil
 }
 
@@ -465,7 +496,7 @@ func (m *Manager) restartReplica(id uuid.UUID) error {
 
 	// Log warning if not in expected state, but proceed anyway (idempotent)
 	if oldReplica.State != replica.ReplicaRunning && oldReplica.State != replica.ReplicaPending {
-		m.logger.Warnf("Restarting replica %s not in Running or Pending state (current: %v), proceeding anyway", oldReplica.Name, oldReplica.State)
+		m.logger.Warnf("Restarting replica %s not in Running or Pending state (current: %v), proceeding anyway", logger.ColorizeReplica(oldReplica.Name), oldReplica.State)
 	}
 
 	// Fetch parent service for current config (image, cmd)
@@ -477,7 +508,7 @@ func (m *Manager) restartReplica(id uuid.UUID) error {
 		svc, err := m.getService(oldReplica.ServiceID)
 		if err != nil {
 			// If service not found, use replica's stored config as fallback
-			m.logger.Warnf("Service not found for replica %s, using stored config: %v", oldReplica.Name, err)
+			m.logger.Warnf("Service not found for replica %s, using stored config: %v", logger.ColorizeReplica(oldReplica.Name), err)
 			newImage = oldReplica.Image
 			newCmd = oldReplica.Cmd
 			serviceName = oldReplica.ServiceName
@@ -498,7 +529,7 @@ func (m *Manager) restartReplica(id uuid.UUID) error {
 		err = m.stopReplica(id)
 		if err != nil && !strings.Contains(err.Error(), "not running") {
 			// Log error but continue - worker may be dead, we'll create new replica anyway
-			m.logger.Warnf("Failed to stop old replica %s: %v", oldReplica.Name, err)
+			m.logger.Warnf("Failed to stop old replica %s: %v", logger.ColorizeReplica(oldReplica.Name), err)
 		}
 	}
 
@@ -534,7 +565,7 @@ func (m *Manager) restartReplica(id uuid.UUID) error {
 	}
 
 	m.logger.Infof("Replica restarted: %s (service: %s, old ID: %s, new ID: %s)",
-		newReplica.Name, serviceName, oldReplica.ID.String(), newReplica.ID.String())
+		logger.ColorizeReplica(newReplica.Name), serviceName, oldReplica.ID.String(), newReplica.ID.String())
 
 	return nil
 }
@@ -579,7 +610,7 @@ func (m *Manager) detectDeadWorkers(heartbeatTimeout time.Duration, checkInterva
 				now := time.Now()
 				for _, worker := range workers {
 					if now.Sub(worker.LastHeartbeat) > heartbeatTimeout {
-						m.logger.Warnf("Worker %s (%s) is dead (no heartbeat for %v), removing", worker.Name, worker.ID.String(), now.Sub(worker.LastHeartbeat))
+						m.logger.Warnf("Worker %s (%s) is dead (no heartbeat for %v), removing", logger.ColorizeWorker(worker.Name), worker.ID.String(), now.Sub(worker.LastHeartbeat))
 						err := m.workers.Delete(worker.ID.String())
 						if err != nil {
 							m.logger.Errorf("error removing dead worker %s: %v", worker.ID.String(), err)
@@ -721,11 +752,11 @@ func (m *Manager) deleteReplicasForService(serviceID uuid.UUID) error {
 	for _, r := range replicas {
 		if r.State == replica.ReplicaRunning {
 			if err := m.stopReplica(r.ID); err != nil {
-				m.logger.Warnf("failed to stop replica %s during delete: %v", r.Name, err)
+				m.logger.Warnf("failed to stop replica %s during delete: %v", logger.ColorizeReplica(r.Name), err)
 			}
 		}
 		if err := m.deleteReplica(r.ID); err != nil {
-			m.logger.Warnf("failed to delete replica %s: %v", r.Name, err)
+			m.logger.Warnf("failed to delete replica %s: %v", logger.ColorizeReplica(r.Name), err)
 		}
 	}
 	return nil

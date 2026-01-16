@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sjsanc/gorc/logger"
 	replica "github.com/sjsanc/gorc/replica"
 	"github.com/sjsanc/gorc/service"
 )
@@ -72,7 +73,7 @@ func (m *Manager) reconcileService(svc *service.Service) error {
 	// Handle failed replicas based on restart policy
 	for _, failedReplica := range failed {
 		if m.shouldRestart(svc, failedReplica) {
-			m.logger.Infof("reconciliation: restarting failed replica %s (service: %s)", failedReplica.Name, svc.Name)
+			m.logger.Infof("reconciliation: restarting failed replica %s (service: %s)", logger.ColorizeReplica(failedReplica.Name), svc.Name)
 			newReplica := m.createReplicaForService(svc, failedReplica.ReplicaID)
 			if err := m.scheduleReplica(newReplica); err != nil {
 				m.logger.Errorf("failed to restart replica: %v", err)
@@ -151,9 +152,9 @@ func (m *Manager) shouldRestart(svc *service.Service, failedReplica *replica.Rep
 func (m *Manager) createReplicaForService(svc *service.Service, replicaID int) *replica.Replica {
 	var replicaName string
 	if svc.AppName != "" {
-		replicaName = fmt.Sprintf("%s-%s-%d", svc.AppName, svc.Name, replicaID)
+		replicaName = fmt.Sprintf("%s:%s:%d", svc.AppName, svc.Name, replicaID)
 	} else {
-		replicaName = fmt.Sprintf("%s-%d", svc.Name, replicaID)
+		replicaName = fmt.Sprintf("%s:%d", svc.Name, replicaID)
 	}
 	r := replica.NewReplica(replicaName, svc.Image, svc.Cmd)
 	r.ServiceID = svc.ID

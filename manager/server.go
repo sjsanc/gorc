@@ -192,8 +192,9 @@ func (s *server) handleRegisterWorker(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":   "registered",
-		"workerId": mw.ID.String(),
+		"status":      "registered",
+		"workerId":    mw.ID.String(),
+		"worker_name": mw.Name,
 	})
 }
 

@@ -10,7 +10,7 @@ import (
 // RegisterWorkerRequest is the request payload for registering a Worker with the Manager.
 type RegisterWorkerRequest struct {
 	WorkerID      string `json:"worker_id"`
-	WorkerName    string `json:"worker_name"`
+	Hostname      string `json:"hostname"`
 	WorkerAddress string `json:"worker_address"`
 	WorkerPort    int    `json:"worker_port"`
 }

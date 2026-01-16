@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sjsanc/gorc/api"
 	"github.com/sjsanc/gorc/config"
+	"github.com/sjsanc/gorc/logger"
 	"github.com/sjsanc/gorc/metrics"
 	"github.com/sjsanc/gorc/node"
 	"github.com/sjsanc/gorc/replica"
@@ -130,7 +131,7 @@ func (w *Worker) Stop() error {
 func (w *Worker) registerWithManager() error {
 	req := api.RegisterWorkerRequest{
 		WorkerID:      w.id.String(),
-		WorkerName:    w.name,
+		Hostname:      w.node.Hostname,
 		WorkerAddress: w.node.Address,
 		WorkerPort:    w.node.WorkerPort,
 	}
@@ -140,7 +141,7 @@ func (w *Worker) registerWithManager() error {
 		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
 
-	w.logger.Debugf("Sending registration for worker %s", req.WorkerName)
+	w.logger.Debugf("Sending registration for worker from hostname %s", req.Hostname)
 
 	endpoint := fmt.Sprintf("http://%s/worker", w.managerAddr)
 	b := bytes.NewBuffer(jsonData)
@@ -151,6 +152,15 @@ func (w *Worker) registerWithManager() error {
 	defer resp.Body.Close()
 
 	w.logger.Debugf("Worker registration response: %s", resp.Status)
+
+	// Parse response to get assigned worker name
+	var respData map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err == nil {
+		if assignedName, ok := respData["worker_name"]; ok {
+			w.name = assignedName
+			w.logger.Debugf("Manager assigned worker name: %s", logger.ColorizeWorker(w.name))
+		}
+	}
 
 	return nil
 }
@@ -169,7 +179,7 @@ func (w *Worker) processEvents() {
 				continue
 			}
 
-			w.logger.Infof("Processing event: %v for replica %s", event.Action, event.Replica.Name)
+			w.logger.Infof("Processing event: %v for replica %s", event.Action, logger.ColorizeReplica(event.Replica.Name))
 
 			switch event.Action {
 			case replica.DeployEvent:
@@ -183,24 +193,24 @@ func (w *Worker) processEvents() {
 
 // handleDeploy starts a container for the given replica.
 func (w *Worker) handleDeploy(t *replica.Replica) {
-	w.logger.Infof("Deploying replica: %s (image: %s)", t.Name, t.Image)
+	w.logger.Infof("Deploying replica: %s (image: %s)", logger.ColorizeReplica(t.Name), t.Image)
 
 	containerID, err := w.runtime.Start(t.Image, t.ID.String(), t.Cmd)
 	if err != nil {
-		w.logger.Errorf("Failed to start replica %s: %v", t.Name, err)
+		w.logger.Errorf("Failed to start replica %s: %v", logger.ColorizeReplica(t.Name), err)
 		t.SetError(err.Error())
 		// Report failure to manager
 		w.reportReplicaStatus(t.ID, "failed", "", err.Error())
 		return
 	}
 
-	w.logger.Infof("Replica %s started successfully (container: %s)", t.Name, containerID)
+	w.logger.Infof("Replica %s started successfully (container: %s)", logger.ColorizeReplica(t.Name), containerID)
 	t.MarkRunning(containerID)
 
 	// Report running status to manager
 	err = w.reportReplicaStatus(t.ID, "running", containerID, "")
 	if err != nil {
-		w.logger.Warnf("Failed to report running status for replica %s: %v", t.Name, err)
+		w.logger.Warnf("Failed to report running status for replica %s: %v", logger.ColorizeReplica(t.Name), err)
 	}
 
 	// Monitor container completion in background
@@ -214,7 +224,7 @@ func (w *Worker) handleDeploy(t *replica.Replica) {
 // monitorReplicaCompletion waits for a container to finish and reports the final status.
 // It respects context cancellation to ensure graceful shutdown.
 func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
-	w.logger.Infof("Monitoring completion for replica: %s (container: %s)", t.Name, t.GetContainerID())
+	w.logger.Infof("Monitoring completion for replica: %s (container: %s)", logger.ColorizeReplica(t.Name), t.GetContainerID())
 
 	// Create a channel to receive the exit code
 	exitCodeChan := make(chan int64, 1)
@@ -233,22 +243,22 @@ func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
 	// Wait for either the container to finish or context cancellation
 	select {
 	case <-w.ctx.Done():
-		w.logger.Infof("Replica monitoring cancelled for replica: %s", t.Name)
+		w.logger.Infof("Replica monitoring cancelled for replica: %s", logger.ColorizeReplica(t.Name))
 		return
 	case err := <-errChan:
-		w.logger.Errorf("Error waiting for replica %s: %v", t.Name, err)
+		w.logger.Errorf("Error waiting for replica %s: %v", logger.ColorizeReplica(t.Name), err)
 		t.SetError(err.Error())
 		w.reportReplicaStatus(t.ID, "failed", t.GetContainerID(), err.Error())
 		return
 	case exitCode := <-exitCodeChan:
 		// Check exit code to determine if replica succeeded or failed
 		if exitCode == 0 {
-			w.logger.Infof("Replica %s completed successfully (exit code: %d)", t.Name, exitCode)
+			w.logger.Infof("Replica %s completed successfully (exit code: %d)", logger.ColorizeReplica(t.Name), exitCode)
 			t.MarkCompleted()
 			w.reportReplicaStatus(t.ID, "completed", t.GetContainerID(), "")
 		} else {
 			errMsg := fmt.Sprintf("container exited with code %d", exitCode)
-			w.logger.Errorf("Replica %s failed: %s", t.Name, errMsg)
+			w.logger.Errorf("Replica %s failed: %s", logger.ColorizeReplica(t.Name), errMsg)
 			t.SetError(errMsg)
 			w.reportReplicaStatus(t.ID, "failed", t.GetContainerID(), errMsg)
 		}
@@ -258,10 +268,10 @@ func (w *Worker) monitorReplicaCompletion(t *replica.Replica) {
 // handleStop stops a running container for the given replica.
 func (w *Worker) handleStop(t *replica.Replica) {
 	containerID := t.GetContainerID()
-	w.logger.Infof("Stopping replica: %s (container: %s)", t.Name, containerID)
+	w.logger.Infof("Stopping replica: %s (container: %s)", logger.ColorizeReplica(t.Name), containerID)
 
 	if containerID == "" {
-		w.logger.Warnf("Replica %s has no container ID, marking completed", t.Name)
+		w.logger.Warnf("Replica %s has no container ID, marking completed", logger.ColorizeReplica(t.Name))
 		t.MarkCompleted()
 		w.reportReplicaStatus(t.ID, "completed", "", "")
 		return
@@ -271,19 +281,19 @@ func (w *Worker) handleStop(t *replica.Replica) {
 	if err != nil {
 		// Check if container already gone (idempotent)
 		if isContainerNotFoundError(err) {
-			w.logger.Warnf("Container already removed for replica %s", t.Name)
+			w.logger.Warnf("Container already removed for replica %s", logger.ColorizeReplica(t.Name))
 			t.MarkCompleted()
 			w.reportReplicaStatus(t.ID, "completed", containerID, "")
 			return
 		}
 
-		w.logger.Errorf("Failed to stop replica %s: %v", t.Name, err)
+		w.logger.Errorf("Failed to stop replica %s: %v", logger.ColorizeReplica(t.Name), err)
 		t.SetError(err.Error())
 		w.reportReplicaStatus(t.ID, "failed", containerID, err.Error())
 		return
 	}
 
-	w.logger.Infof("Replica %s stopped successfully", t.Name)
+	w.logger.Infof("Replica %s stopped successfully", logger.ColorizeReplica(t.Name))
 	t.MarkCompleted()
 	w.reportReplicaStatus(t.ID, "completed", containerID, "")
 }
@@ -319,7 +329,7 @@ func (w *Worker) reportReplicaStatus(replicaID uuid.UUID, state, containerID, er
 		return fmt.Errorf("manager rejected status update, status code: %d", resp.StatusCode)
 	}
 
-	w.logger.Debugf("Reported replica %s status to manager: %s", replicaID.String(), state)
+	w.logger.Debugf("Reported replica %s status to manager: %s", logger.ColorizeReplica(replicaID.String()), state)
 	return nil
 }
 

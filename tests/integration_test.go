@@ -118,7 +118,7 @@ func TestNodeRegistry(t *testing.T) {
 }
 
 // Feature 4: replica Deployment
-func TestreplicaDeployment(t *testing.T) {
+func TestReplicaDeployment(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 
@@ -154,7 +154,7 @@ func TestreplicaDeployment(t *testing.T) {
 }
 
 // Feature 5: replica Event Processing
-func TestreplicaEventProcessing(t *testing.T) {
+func TestReplicaEventProcessing(t *testing.T) {
 	logger := zap.NewNop()
 	sugar := logger.Sugar()
 

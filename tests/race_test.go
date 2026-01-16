@@ -107,8 +107,8 @@ func TestConcurrentStorageAccess(t *testing.T) {
 	}
 }
 
-// TestreplicaSetterConsistency verifies that compound operations are atomic.
-func TestreplicaSetterConsistency(t *testing.T) {
+// TestReplicaSetterConsistency verifies that compound operations are atomic.
+func TestReplicaSetterConsistency(t *testing.T) {
 	tk := replica.NewReplica("test-consistency", "alpine:latest", nil)
 	var wg sync.WaitGroup
 
