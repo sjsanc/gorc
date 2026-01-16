@@ -86,12 +86,14 @@ func (s *server) initRouter() {
 		r.Get("/", s.handleListReplicas)
 		r.Put("/{replicaID}/status", s.handleUpdateReplicaStatus)
 		r.Delete("/{replicaID}", s.handleStopReplica)
+		r.Post("/{replicaID}/restart", s.handleRestartReplica)
 	})
 	s.router.Route("/services", func(r chi.Router) {
 		r.Post("/", s.handleCreateOrUpdateService)
 		r.Get("/", s.handleListServices)
 		r.Put("/{serviceID}", s.handleUpdateService)
 		r.Delete("/{serviceName}", s.handleDeleteService)
+		r.Get("/{serviceID}/replicas", s.handleGetServiceReplicas)
 	})
 	s.router.Route("/apps", func(r chi.Router) {
 		r.Get("/", s.handleListApps)
@@ -388,6 +390,40 @@ func (s *server) handleStopReplicaLegacy(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// POST /replicas/{replicaID}/restart
+//
+// Restart a replica (stop old and schedule new one)
+func (s *server) handleRestartReplica(w http.ResponseWriter, r *http.Request) {
+	replicaIDStr := chi.URLParam(r, "replicaID")
+	if replicaIDStr == "" {
+		http.Error(w, "replica ID is required", http.StatusBadRequest)
+		return
+	}
+
+	replicaID, err := parseUUID(replicaIDStr)
+	if err != nil {
+		http.Error(w, "invalid replica ID", http.StatusBadRequest)
+		return
+	}
+
+	err = s.manager.restartReplica(replicaID)
+	if err != nil {
+		if isNotFoundError(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("error restarting replica: %v", err), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":     "restart initiated",
+		"replica_id": replicaIDStr,
+	})
+}
+
 // Service handlers
 
 // POST /services - Create or update a service
@@ -587,6 +623,35 @@ func (s *server) handleListAppServices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(appServices)
+}
+
+// GET /services/{serviceID}/replicas - Get all replicas for a service
+func (s *server) handleGetServiceReplicas(w http.ResponseWriter, r *http.Request) {
+	serviceIDStr := chi.URLParam(r, "serviceID")
+	if serviceIDStr == "" {
+		http.Error(w, "service ID is required", http.StatusBadRequest)
+		return
+	}
+
+	serviceID, err := parseUUID(serviceIDStr)
+	if err != nil {
+		http.Error(w, "invalid service ID", http.StatusBadRequest)
+		return
+	}
+
+	replicas, err := s.manager.getReplicasForService(serviceID)
+	if err != nil {
+		http.Error(w, "error getting replicas", http.StatusInternalServerError)
+		return
+	}
+
+	if replicas == nil {
+		replicas = []*replica.Replica{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(replicas)
 }
 
 // DELETE /apps/{appName} - Delete an app and all its services and replicas

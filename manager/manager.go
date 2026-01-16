@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -404,6 +405,90 @@ func (m *Manager) stopReplica(replicaID uuid.UUID) error {
 	}
 
 	m.logger.Infof("Stop request sent to worker for replica %s", r.Name)
+	return nil
+}
+
+// restartReplica forcefully restarts a replica by stopping the old one and scheduling a new one.
+func (m *Manager) restartReplica(id uuid.UUID) error {
+	// Fetch the old replica
+	oldReplica, err := m.getReplica(id)
+	if err != nil {
+		return err
+	}
+
+	// Log warning if not in expected state, but proceed anyway (idempotent)
+	if oldReplica.State != replica.ReplicaRunning && oldReplica.State != replica.ReplicaPending {
+		m.logger.Warnf("Restarting replica %s not in Running or Pending state (current: %v), proceeding anyway", oldReplica.Name, oldReplica.State)
+	}
+
+	// Fetch parent service for current config (image, cmd)
+	var newImage string
+	var newCmd []string
+	var serviceName string
+
+	if oldReplica.ServiceID != uuid.Nil {
+		svc, err := m.getService(oldReplica.ServiceID)
+		if err != nil {
+			// If service not found, use replica's stored config as fallback
+			m.logger.Warnf("Service not found for replica %s, using stored config: %v", oldReplica.Name, err)
+			newImage = oldReplica.Image
+			newCmd = oldReplica.Cmd
+			serviceName = oldReplica.ServiceName
+		} else {
+			newImage = svc.Image
+			newCmd = svc.Cmd
+			serviceName = svc.Name
+		}
+	} else {
+		// Orphaned replica, use stored config
+		newImage = oldReplica.Image
+		newCmd = oldReplica.Cmd
+		serviceName = oldReplica.ServiceName
+	}
+
+	// Stop the old replica (ignore "already stopped" errors)
+	if oldReplica.State == replica.ReplicaRunning {
+		err = m.stopReplica(id)
+		if err != nil && !strings.Contains(err.Error(), "not running") {
+			// Log error but continue - worker may be dead, we'll create new replica anyway
+			m.logger.Warnf("Failed to stop old replica %s: %v", oldReplica.Name, err)
+		}
+	}
+
+	// Delete old replica from store
+	err = m.deleteReplica(id)
+	if err != nil {
+		return fmt.Errorf("error deleting old replica: %v", err)
+	}
+
+	// Create new replica with same ReplicaID integer but new UUID
+	newReplica := &replica.Replica{
+		ID:          uuid.New(),
+		Name:        oldReplica.Name,
+		Image:       newImage,
+		Cmd:         newCmd,
+		State:       replica.ReplicaPending,
+		ServiceID:   oldReplica.ServiceID,
+		ServiceName: serviceName,
+		ReplicaID:   oldReplica.ReplicaID,
+		CreatedAt:   time.Now(),
+	}
+
+	// Store the new replica
+	err = m.replicas.Put(newReplica.ID.String(), newReplica)
+	if err != nil {
+		return fmt.Errorf("error storing new replica: %v", err)
+	}
+
+	// Schedule the new replica
+	err = m.scheduleReplica(newReplica)
+	if err != nil {
+		return fmt.Errorf("error scheduling new replica: %v", err)
+	}
+
+	m.logger.Infof("Replica restarted: %s (service: %s, old ID: %s, new ID: %s)",
+		newReplica.Name, serviceName, oldReplica.ID.String(), newReplica.ID.String())
+
 	return nil
 }
 
